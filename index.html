@@ -35,10 +35,13 @@
   /* tabs */
   .tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
   /* calendar */
-  .week-nav{display:flex;align-items:center;gap:10px;margin-bottom:14px;}
+  .week-nav{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
   .week-nav span{font-weight:600;}
+  .day-tabs{display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;padding-bottom:2px;}
+  .day-tabs button{flex:0 0 auto;padding:8px 10px;font-size:12px;line-height:1.3;white-space:nowrap;}
   .cal-wrap{overflow-x:auto;}
   .cal-grid{display:grid;grid-template-columns:56px repeat(7,minmax(110px,1fr));min-width:850px;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+  .cal-grid.cal-grid-mobile{grid-template-columns:48px 1fr;min-width:0;}
   .cal-head{background:#f8f9fb;padding:8px 4px;text-align:center;font-size:12px;font-weight:600;border-bottom:1px solid var(--border);border-left:1px solid var(--border);}
   .cal-head:first-child{border-left:none;}
   .cal-head small{display:block;font-weight:400;color:var(--muted);}
@@ -46,6 +49,7 @@
   .day-col{position:relative;border-left:1px solid var(--border);border-top:1px solid var(--border);}
   .day-col .hour-line{height:48px;border-bottom:1px dashed #eef0f3;cursor:pointer;}
   .day-col .hour-line:hover{background:#f5f8ff;}
+  .cal-grid-mobile .block{font-size:13px;padding:6px 8px;}
   .block{position:absolute;left:2px;right:2px;border-radius:5px;font-size:11px;padding:3px 5px;overflow:hidden;line-height:1.3;cursor:default;}
   .block.busy{background:var(--busy);color:#475569;}
   .block.mine{background:var(--mine-light);border:1px solid var(--mine);color:#1e3a8a;cursor:pointer;}
@@ -105,6 +109,7 @@
           <button class="btn-outline small-btn" onclick="shiftWeek(1)">Săpt. următoare ›</button>
           <button class="btn-outline small-btn" onclick="goToday()">Azi</button>
         </div>
+        <div class="day-tabs hidden" id="dayTabs"></div>
         <div class="cal-wrap">
           <div class="cal-grid" id="calGrid"></div>
         </div>
@@ -252,6 +257,7 @@ const DAY_NAMES = ['Luni','Marți','Miercuri','Joi','Vineri','Sâmbătă','Dumin
 
 let currentUser = null;   // { email, isAdmin, name, hourlyRate }
 let weekStart = getMonday(new Date());
+let selectedDayIndex = defaultDayIndexForWeek(weekStart); // index (0=Luni) afișat pe telefon
 let activeTab = 'calendar';
 let myBookingsCache = [];   // rezervările proprii (cu detalii), pt săptămâna afișată
 let busySlotsCache = [];    // sloturile ocupate de oricine (fără identitate), pt săptămâna afișată
@@ -283,6 +289,12 @@ function monthRangeKeys(d){
   return [start, end];
 }
 function monthLabel(d){ return MONTH_NAMES[d.getMonth()] + ' ' + d.getFullYear(); }
+function isMobile(){ return window.matchMedia('(max-width:700px)').matches; }
+function defaultDayIndexForWeek(ws){
+  const today = new Date();
+  if(dateKey(getMonday(today)) === dateKey(ws)) return (today.getDay()+6)%7;
+  return 0;
+}
 
 // ---------- Autentificare ----------
 function doLogin(){
@@ -339,6 +351,7 @@ auth.onAuthStateChanged(async (user)=>{
   buildTabs();
   showTab();
   weekStart = getMonday(new Date());
+  selectedDayIndex = defaultDayIndexForWeek(weekStart);
   await refreshAll();
 });
 
@@ -374,8 +387,8 @@ function showTab(){
 }
 
 // ---------- Navigare săptămână ----------
-function shiftWeek(n){ weekStart = addDays(weekStart, 7*n); refreshAll(); }
-function goToday(){ weekStart = getMonday(new Date()); refreshAll(); }
+function shiftWeek(n){ weekStart = addDays(weekStart, 7*n); selectedDayIndex = defaultDayIndexForWeek(weekStart); refreshAll(); }
+function goToday(){ weekStart = getMonday(new Date()); selectedDayIndex = defaultDayIndexForWeek(weekStart); refreshAll(); }
 
 async function refreshAll(){
   await loadWeekData();
@@ -408,6 +421,19 @@ async function loadWeekData(){
 }
 
 // ---------- Calendar ----------
+function buildDayTabs(){
+  const wrap = document.getElementById('dayTabs');
+  wrap.innerHTML = '';
+  for(let i=0;i<7;i++){
+    const d = addDays(weekStart, i);
+    const btn = document.createElement('button');
+    btn.className = 'btn-outline small-btn' + (i===selectedDayIndex ? ' active' : '');
+    btn.innerHTML = DAY_NAMES[i].slice(0,3) + '<br>' + pad2(d.getDate())+'.'+pad2(d.getMonth()+1);
+    btn.onclick = ()=>{ selectedDayIndex = i; renderCalendar(); };
+    wrap.appendChild(btn);
+  }
+}
+
 function renderCalendar(){
   document.getElementById('weekLabel').textContent =
     formatDateRo(weekStart) + ' – ' + formatDateRo(addDays(weekStart,6));
@@ -415,25 +441,33 @@ function renderCalendar(){
     ? 'Click pe o celulă liberă pentru a face o rezervare. Click pe ✕ pentru a anula orice rezervare. 🔁 = rezervare dintr-o serie recurentă.'
     : 'Click pe o celulă liberă pentru a face o rezervare. Blocurile gri sunt ocupate de alți artiști (fără detalii). Blocurile albastre sunt rezervările tale — click pe 🗑 pentru a cere ștergerea (necesită aprobarea administratorului).';
 
+  const mobile = isMobile();
+  document.getElementById('dayTabs').classList.toggle('hidden', !mobile);
+  if(mobile) buildDayTabs();
+
   const hourCount = (DAY_END-DAY_START)/60;
+  const rowHeight = mobile ? 56 : 48;
   const grid = document.getElementById('calGrid');
   grid.innerHTML = '';
-  grid.style.gridTemplateRows = '40px ' + (hourCount*48) + 'px';
+  grid.className = 'cal-grid' + (mobile ? ' cal-grid-mobile' : '');
+  grid.style.gridTemplateColumns = mobile ? '48px 1fr' : '56px repeat(7,minmax(110px,1fr))';
+  grid.style.gridTemplateRows = '40px ' + (hourCount*rowHeight) + 'px';
+
+  const days = mobile ? [addDays(weekStart, selectedDayIndex)] : Array.from({length:7}, (_,i)=>addDays(weekStart,i));
 
   // header gol peste coloana de ore, apoi câte un header per zi
   grid.appendChild(makeDiv('cal-head',''));
-  const days = [];
-  for(let i=0;i<7;i++){
-    const d = addDays(weekStart,i);
-    days.push(d);
-    grid.appendChild(makeDiv('cal-head', DAY_NAMES[i] + '<small>'+formatDateRo(d)+'</small>'));
-  }
+  days.forEach((d,i)=>{
+    const dayIdx = mobile ? selectedDayIndex : i;
+    grid.appendChild(makeDiv('cal-head', DAY_NAMES[dayIdx] + '<small>'+formatDateRo(d)+'</small>'));
+  });
 
   const hourLabelsWrap = document.createElement('div');
   hourLabelsWrap.style.position='relative';
   for(let h=0; h<hourCount; h++){
     const lbl = document.createElement('div');
     lbl.className='hour-label';
+    lbl.style.height = rowHeight+'px';
     lbl.textContent = minutesToLabel(DAY_START+h*60);
     hourLabelsWrap.appendChild(lbl);
   }
@@ -445,6 +479,7 @@ function renderCalendar(){
     for(let h=0; h<hourCount; h++){
       const line = document.createElement('div');
       line.className = 'hour-line';
+      line.style.height = rowHeight+'px';
       line.onclick = ()=> openBookingModal(d, DAY_START+h*60);
       col.appendChild(line);
     }
@@ -462,6 +497,8 @@ function renderCalendar(){
     grid.appendChild(col);
   });
 }
+
+window.addEventListener('resize', ()=>{ if(currentUser && activeTab==='calendar') renderCalendar(); });
 
 function makeDiv(cls, html){ const d=document.createElement('div'); d.className=cls; d.innerHTML=html; return d; }
 
