@@ -205,6 +205,10 @@
       <div><label>Ora start</label><select id="modalStart"></select></div>
       <div><label>Ora sfârșit</label><select id="modalEnd"></select></div>
     </div>
+    <div id="modalArtistWrap" class="hidden">
+      <label>Rezervă pentru</label>
+      <select id="modalArtistSelect"></select>
+    </div>
     <div style="margin-top:12px;">
       <label style="display:flex;align-items:center;gap:6px;margin-top:0;">
         <input type="checkbox" id="modalRepeat" onchange="toggleRepeatOptions()" style="width:auto;"> Repetă săptămânal
@@ -325,6 +329,10 @@ async function refreshPendingCount(){
   const snap = await db.collection('deleteRequests').where('status','==','pending').get();
   pendingRequestsCount = snap.size;
 }
+async function loadArtistsCache(){
+  const snap = await db.collection('artists').get();
+  artistsCache = snap.docs.map(d=>({id:d.id, ...d.data()}));
+}
 
 // ---------- Autentificare ----------
 function doLogin(){
@@ -378,7 +386,7 @@ auth.onAuthStateChanged(async (user)=>{
   document.getElementById('appScreen').classList.remove('hidden');
   document.getElementById('whoAmI').textContent = (isAdmin? '👤 Admin — ' : '🎤 ') + name;
 
-  if(isAdmin) await refreshPendingCount();
+  if(isAdmin){ await refreshPendingCount(); await loadArtistsCache(); }
   buildTabs();
   showTab();
   weekStart = getMonday(new Date());
@@ -633,6 +641,25 @@ function openBookingModal(date, suggestedStart){
   }
   startSel.onchange = fillEnd;
   endSel.onchange = updatePreview;
+
+  const artistWrap = document.getElementById('modalArtistWrap');
+  const artistSelect = document.getElementById('modalArtistSelect');
+  if(currentUser.isAdmin){
+    artistWrap.classList.remove('hidden');
+    artistSelect.innerHTML = '';
+    const optNone = document.createElement('option');
+    optNone.value = ''; optNone.textContent = '(fără artist — blocare internă)';
+    artistSelect.appendChild(optNone);
+    artistsCache.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'')).forEach(a=>{
+      const o = document.createElement('option');
+      o.value = a.email; o.textContent = a.name || a.email;
+      artistSelect.appendChild(o);
+    });
+    artistSelect.onchange = updatePreview;
+  } else {
+    artistWrap.classList.add('hidden');
+  }
+
   fillEnd();
   document.getElementById('modalError').textContent='';
   document.getElementById('modalRepeat').checked = false;
@@ -646,13 +673,27 @@ function openBookingModal(date, suggestedStart){
 function toggleRepeatOptions(){
   document.getElementById('repeatOptions').classList.toggle('hidden', !document.getElementById('modalRepeat').checked);
 }
+function getBookingArtistContext(){
+  if(currentUser.isAdmin){
+    const sel = document.getElementById('modalArtistSelect');
+    const email = sel ? sel.value : '';
+    if(email){
+      const a = artistsCache.find(x=>x.email===email);
+      return { email, name: a ? (a.name||email) : email, rate: a ? (a.hourlyRate||0) : 0 };
+    }
+    return { email: currentUser.email, name: currentUser.name, rate: 0 };
+  }
+  return { email: currentUser.email, name: currentUser.name, rate: currentUser.hourlyRate||0 };
+}
 function updatePreview(){
   const start = parseInt(document.getElementById('modalStart').value);
   const end = parseInt(document.getElementById('modalEnd').value);
   const hours = (end-start)/60;
-  const cost = (hours*(currentUser.hourlyRate||0)).toFixed(2);
+  const ctx = getBookingArtistContext();
+  const cost = (hours*(ctx.rate||0)).toFixed(2);
   document.getElementById('modalPreview').textContent =
-    minutesToLabel(start)+' – '+minutesToLabel(end)+'  ('+hours.toFixed(2)+' h)  ≈ '+cost+' RON';
+    minutesToLabel(start)+' – '+minutesToLabel(end)+'  ('+hours.toFixed(2)+' h)  ≈ '+cost+' RON' +
+    (currentUser.isAdmin ? '  —  '+ctx.name : '');
 }
 function closeModal(){ document.getElementById('bookingModalBg').classList.add('hidden'); modalCtx=null; }
 
@@ -688,8 +729,9 @@ async function confirmBooking(){
     }
   }
 
+  const ctx = getBookingArtistContext();
   const hours = (end-start)/60;
-  const cost = +(hours*(currentUser.hourlyRate||0)).toFixed(2);
+  const cost = +(hours*(ctx.rate||0)).toFixed(2);
   const seriesId = (repeatOn && occurrenceDates.length>1) ? db.collection('bookings').doc().id : null;
   const batch = db.batch();
   const skipped = [];
@@ -706,8 +748,8 @@ async function confirmBooking(){
     const bookingRef = db.collection('bookings').doc();
     const slotRef = db.collection('slots').doc();
     batch.set(bookingRef, {
-      artistEmail: currentUser.email,
-      artistName: currentUser.name,
+      artistEmail: ctx.email,
+      artistName: ctx.name,
       date: dk, start, end, cost,
       slotId: slotRef.id,
       seriesId: seriesId,
