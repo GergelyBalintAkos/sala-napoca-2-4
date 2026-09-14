@@ -219,6 +219,11 @@
       <label>Rezervă pentru</label>
       <select id="modalArtistSelect"></select>
     </div>
+    <div id="modalFullDayWrap" class="hidden" style="margin-top:12px;">
+      <label style="display:flex;align-items:center;gap:6px;margin-top:0;">
+        <input type="checkbox" id="modalFullDay" onchange="toggleFullDay()" style="width:auto;"> Zi întreagă (07:00–22:00)
+      </label>
+    </div>
     <div style="margin-top:12px;">
       <label style="display:flex;align-items:center;gap:6px;margin-top:0;">
         <input type="checkbox" id="modalRepeat" onchange="toggleRepeatOptions()" style="width:auto;"> Repetă săptămânal
@@ -232,6 +237,16 @@
           <input type="radio" name="repeatMode" value="unlimited" style="width:auto;"> Nelimitat (implicit 1 an înainte)
         </label>
         <p class="note">Din motive de siguranță, se creează cel mult 104 rezervări (~2 ani) dintr-o singură serie.</p>
+      </div>
+    </div>
+    <div id="modalRangeWrap" class="hidden" style="margin-top:12px;">
+      <label style="display:flex;align-items:center;gap:6px;margin-top:0;">
+        <input type="checkbox" id="modalDateRange" onchange="toggleDateRangeOptions()" style="width:auto;"> Blochează un interval de zile consecutive
+      </label>
+      <div id="dateRangeOptions" class="hidden" style="margin-top:8px;">
+        <label>Până la data (inclusiv)</label>
+        <input type="date" id="modalRangeUntil">
+        <p class="note">Se creează o rezervare pentru FIECARE zi din interval (nu doar aceeași zi a săptămânii, ca la repetarea săptămânală). Bifează și "Zi întreagă" mai sus ca să blochezi complet fiecare zi. Maxim 104 zile odată.</p>
       </div>
     </div>
     <div class="preview" id="modalPreview"></div>
@@ -249,7 +264,7 @@
     <p style="margin:4px 0;">Dată: <b id="detailDate"></b></p>
     <p style="margin:4px 0;">Interval: <b id="detailInterval"></b></p>
     <p id="detailArtistRow" class="hidden" style="margin:4px 0;">Artist: <b id="detailArtist"></b></p>
-    <p id="detailSeriesNote" class="note hidden">🔁 Parte dintr-o serie recurentă (repetare săptămânală).</p>
+    <p id="detailSeriesNote" class="note hidden">🔁 Parte dintr-o serie de rezervări legate (repetare săptămânală sau interval de zile blocat).</p>
     <div class="actions" id="detailActions" style="flex-direction:column;align-items:stretch;gap:8px;margin-top:16px;"></div>
   </div>
 </div>
@@ -606,7 +621,7 @@ function openSeriesDeleteChoice(b, mode){
   seriesDeleteCtx = { b, mode };
   const verb = mode==='cancel' ? 'anulezi' : 'trimiți o cerere de ștergere pentru';
   document.getElementById('seriesDeleteText').textContent =
-    'Această rezervare face parte dintr-o serie cu repetare săptămânală. Ce dorești să ' + verb + '?';
+    'Această rezervare face parte dintr-o serie de rezervări legate (repetare săptămânală sau interval de zile). Ce dorești să ' + verb + '?';
   closeBookingDetail();
   document.getElementById('seriesDeleteModalBg').classList.remove('hidden');
 }
@@ -678,9 +693,54 @@ function openBookingModal(date, suggestedStart){
   const untilInput = document.getElementById('modalRepeatUntil');
   untilInput.min = dateKey(date);
   untilInput.value = '';
+
+  document.getElementById('modalFullDay').checked = false;
+  startSel.disabled = false; endSel.disabled = false;
+
+  const rangeWrap = document.getElementById('modalRangeWrap');
+  const fullDayWrap = document.getElementById('modalFullDayWrap');
+  if(currentUser.isAdmin){
+    rangeWrap.classList.remove('hidden');
+    fullDayWrap.classList.remove('hidden');
+  } else {
+    rangeWrap.classList.add('hidden');
+    fullDayWrap.classList.add('hidden');
+  }
+  document.getElementById('modalDateRange').checked = false;
+  document.getElementById('dateRangeOptions').classList.add('hidden');
+  const rangeUntilInput = document.getElementById('modalRangeUntil');
+  rangeUntilInput.min = dateKey(date);
+  rangeUntilInput.value = '';
+
   document.getElementById('bookingModalBg').classList.remove('hidden');
 }
+function toggleFullDay(){
+  const on = document.getElementById('modalFullDay').checked;
+  const startSel = document.getElementById('modalStart');
+  const endSel = document.getElementById('modalEnd');
+  startSel.disabled = on;
+  endSel.disabled = on;
+  if(on){
+    startSel.value = DAY_START;
+    if(startSel.onchange) startSel.onchange();
+    endSel.value = DAY_END;
+  }
+  updatePreview();
+}
+function toggleDateRangeOptions(){
+  const on = document.getElementById('modalDateRange').checked;
+  document.getElementById('dateRangeOptions').classList.toggle('hidden', !on);
+  if(on){
+    document.getElementById('modalRepeat').checked = false;
+    document.getElementById('repeatOptions').classList.add('hidden');
+  }
+}
 function toggleRepeatOptions(){
+  const on = document.getElementById('modalRepeat').checked;
+  if(on && document.getElementById('modalDateRange')){
+    document.getElementById('modalDateRange').checked = false;
+    document.getElementById('dateRangeOptions').classList.add('hidden');
+  }
   document.getElementById('repeatOptions').classList.toggle('hidden', !document.getElementById('modalRepeat').checked);
 }
 function getBookingArtistContext(){
@@ -715,7 +775,9 @@ async function confirmBooking(){
   if(end<=start){ document.getElementById('modalError').textContent='Ora de sfârșit trebuie să fie după ora de start.'; return; }
 
   const repeatOn = document.getElementById('modalRepeat').checked;
-  const MAX_OCCURRENCES = 104; // limită de siguranță (~2 ani), valabilă și pentru "până la dată"
+  const dateRangeEl = document.getElementById('modalDateRange');
+  const dateRangeOn = dateRangeEl ? dateRangeEl.checked : false;
+  const MAX_OCCURRENCES = 104; // limită de siguranță (~2 ani / ~2 ani de zile), valabilă pentru ambele moduri
   let occurrenceDates = [baseDate];
 
   if(repeatOn){
@@ -737,12 +799,25 @@ async function confirmBooking(){
       d = addDays(d, 7);
       count++;
     }
+  } else if(dateRangeOn){
+    const untilStr = document.getElementById('modalRangeUntil').value;
+    if(!untilStr){ document.getElementById('modalError').textContent='Alege data de final a intervalului.'; return; }
+    const untilDate = new Date(untilStr+'T00:00:00');
+    if(untilDate < baseDate){ document.getElementById('modalError').textContent='Data de final trebuie să fie după data de start.'; return; }
+    occurrenceDates = [];
+    let d = new Date(baseDate);
+    let count = 0;
+    while(d <= untilDate && count < MAX_OCCURRENCES){
+      occurrenceDates.push(new Date(d));
+      d = addDays(d, 1); // fiecare zi consecutivă, nu doar aceeași zi a săptămânii
+      count++;
+    }
   }
 
   const ctx = getBookingArtistContext();
   const hours = (end-start)/60;
   const cost = +(hours*(ctx.rate||0)).toFixed(2);
-  const seriesId = (repeatOn && occurrenceDates.length>1) ? db.collection('bookings').doc().id : null;
+  const seriesId = ((repeatOn||dateRangeOn) && occurrenceDates.length>1) ? db.collection('bookings').doc().id : null;
   const batch = db.batch();
   const skipped = [];
   let createdCount = 0;
