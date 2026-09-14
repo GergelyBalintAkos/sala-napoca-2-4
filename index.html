@@ -208,9 +208,10 @@
 
 <div id="bookingModalBg" class="modal-bg hidden">
   <div class="modal">
-    <h3>Rezervare nouă</h3>
+    <h3 id="modalTitle">Rezervare nouă</h3>
     <label>Dată</label>
     <input type="text" id="modalDate" disabled>
+    <input type="date" id="modalDateEdit" class="hidden">
     <div class="row">
       <div><label>Ora start</label><select id="modalStart"></select></div>
       <div><label>Ora sfârșit</label><select id="modalEnd"></select></div>
@@ -224,7 +225,7 @@
         <input type="checkbox" id="modalFullDay" onchange="toggleFullDay()" style="width:auto;"> Zi întreagă (07:00–22:00)
       </label>
     </div>
-    <div style="margin-top:12px;">
+    <div id="modalRepeatWrap" style="margin-top:12px;">
       <label style="display:flex;align-items:center;gap:6px;margin-top:0;">
         <input type="checkbox" id="modalRepeat" onchange="toggleRepeatOptions()" style="width:auto;"> Repetă săptămânal
       </label>
@@ -253,7 +254,7 @@
     <div id="modalError" class="modal-error"></div>
     <div class="actions">
       <button class="btn-outline" onclick="closeModal()">Renunță</button>
-      <button class="btn-primary" onclick="confirmBooking()">Rezervă</button>
+      <button class="btn-primary" id="modalConfirmBtn" onclick="onModalConfirm()">Rezervă</button>
     </div>
   </div>
 </div>
@@ -584,7 +585,9 @@ function makeBookingBlock(b, kind, hourCount, isAdminView){
 
 // ---------- Detalii rezervare (popup mare, util mai ales pe telefon) ----------
 function openBookingDetail(b, kind, isAdminView){
-  document.getElementById('detailTitle').textContent = kind==='busy' ? 'Interval ocupat' : 'Rezervare';
+  let title = kind==='busy' ? 'Interval ocupat' : 'Rezervare';
+  if(kind!=='busy' && !isAdminView){ title += ' ' + currentUser.name; }
+  document.getElementById('detailTitle').textContent = title;
   document.getElementById('detailDate').textContent = b.date;
   document.getElementById('detailInterval').textContent = minutesToLabel(b.start)+'–'+minutesToLabel(b.end);
 
@@ -600,6 +603,13 @@ function openBookingDetail(b, kind, isAdminView){
   const actions = document.getElementById('detailActions');
   actions.innerHTML = '';
   if(kind!=='busy'){
+    if(currentUser.isAdmin){
+      const editBtn = document.createElement('button');
+      editBtn.className='btn-primary'; editBtn.style.width='100%';
+      editBtn.textContent = 'Modifică';
+      editBtn.onclick = ()=> openEditBookingModal(b);
+      actions.appendChild(editBtn);
+    }
     const btn = document.createElement('button');
     btn.className='btn-danger'; btn.style.width='100%';
     btn.textContent = currentUser.isAdmin ? 'Anulează rezervarea' : 'Cere ștergere';
@@ -642,8 +652,15 @@ async function seriesDeleteChoice(scope){
 
 // ---------- Creare rezervare ----------
 let modalCtx = null;
+let editingBooking = null; // rezervarea existentă în curs de modificare (admin), altfel null = mod creare
 function openBookingModal(date, suggestedStart){
+  editingBooking = null;
   modalCtx = { date };
+  document.getElementById('modalTitle').textContent = 'Rezervare nouă';
+  document.getElementById('modalConfirmBtn').textContent = 'Rezervă';
+  document.getElementById('modalDateEdit').classList.add('hidden');
+  document.getElementById('modalDate').classList.remove('hidden');
+  document.getElementById('modalRepeatWrap').classList.remove('hidden');
   document.getElementById('modalDate').value = DAY_NAMES[(date.getDay()+6)%7] + ', ' + formatDateRo(date);
   const startSel = document.getElementById('modalStart');
   const endSel = document.getElementById('modalEnd');
@@ -714,6 +731,74 @@ function openBookingModal(date, suggestedStart){
 
   document.getElementById('bookingModalBg').classList.remove('hidden');
 }
+
+// ---------- Modificare rezervare existentă (doar admin) ----------
+function openEditBookingModal(b){
+  editingBooking = b;
+  modalCtx = { date: new Date(b.date+'T00:00:00') };
+
+  document.getElementById('modalTitle').textContent = 'Modifică rezervarea';
+  document.getElementById('modalConfirmBtn').textContent = 'Salvează modificările';
+
+  document.getElementById('modalDate').classList.add('hidden');
+  const dateEdit = document.getElementById('modalDateEdit');
+  dateEdit.classList.remove('hidden');
+  dateEdit.value = b.date;
+
+  const startSel = document.getElementById('modalStart');
+  const endSel = document.getElementById('modalEnd');
+  startSel.innerHTML=''; endSel.innerHTML='';
+  for(let t=DAY_START; t<DAY_END; t+=SLOT_STEP){
+    const o=document.createElement('option'); o.value=t; o.textContent=minutesToLabel(t);
+    if(t===b.start) o.selected=true;
+    startSel.appendChild(o);
+  }
+  function fillEnd(){
+    const startVal = parseInt(startSel.value);
+    endSel.innerHTML='';
+    for(let t=startVal+SLOT_STEP; t<=DAY_END; t+=SLOT_STEP){
+      const o=document.createElement('option'); o.value=t; o.textContent=minutesToLabel(t);
+      endSel.appendChild(o);
+    }
+    const defaultEnd = b.end>startVal ? Math.min(b.end, DAY_END) : Math.min(startVal+60, DAY_END);
+    endSel.value = defaultEnd;
+    updatePreview();
+  }
+  startSel.onchange = fillEnd;
+  endSel.onchange = updatePreview;
+
+  const artistSelect = document.getElementById('modalArtistSelect');
+  document.getElementById('modalArtistWrap').classList.remove('hidden');
+  artistSelect.innerHTML = '';
+  const optNone = document.createElement('option');
+  optNone.value = ''; optNone.textContent = '(fără artist — blocare internă)';
+  artistSelect.appendChild(optNone);
+  artistsCache.slice().sort((a,c)=>(a.name||'').localeCompare(c.name||'')).forEach(a=>{
+    const o = document.createElement('option');
+    o.value = a.email; o.textContent = a.name || a.email;
+    if(a.email===b.artistEmail) o.selected=true;
+    artistSelect.appendChild(o);
+  });
+  artistSelect.onchange = updatePreview;
+
+  fillEnd();
+  document.getElementById('modalError').textContent='';
+
+  // opțiunile de repetare/interval/zi întreagă nu se aplică la modificarea unei singure rezervări
+  document.getElementById('modalRepeatWrap').classList.add('hidden');
+  document.getElementById('modalRepeat').checked = false;
+  document.getElementById('repeatOptions').classList.add('hidden');
+  document.getElementById('modalFullDayWrap').classList.add('hidden');
+  document.getElementById('modalFullDay').checked = false;
+  document.getElementById('modalRangeWrap').classList.add('hidden');
+  document.getElementById('modalDateRange').checked = false;
+  document.getElementById('dateRangeOptions').classList.add('hidden');
+  startSel.disabled = false; endSel.disabled = false;
+
+  closeBookingDetail();
+  document.getElementById('bookingModalBg').classList.remove('hidden');
+}
+
 function toggleFullDay(){
   const on = document.getElementById('modalFullDay').checked;
   const startSel = document.getElementById('modalStart');
@@ -765,7 +850,60 @@ function updatePreview(){
     minutesToLabel(start)+' – '+minutesToLabel(end)+'  ('+hours.toFixed(2)+' h)  ≈ '+cost+' RON' +
     (currentUser.isAdmin ? '  —  '+ctx.name : '');
 }
-function closeModal(){ document.getElementById('bookingModalBg').classList.add('hidden'); modalCtx=null; }
+function closeModal(){ document.getElementById('bookingModalBg').classList.add('hidden'); modalCtx=null; editingBooking=null; }
+
+function onModalConfirm(){
+  if(editingBooking) confirmEditBooking();
+  else confirmBooking();
+}
+
+async function confirmEditBooking(){
+  const b = editingBooking;
+  const start = parseInt(document.getElementById('modalStart').value);
+  const end = parseInt(document.getElementById('modalEnd').value);
+  document.getElementById('modalError').textContent = '';
+  if(end<=start){ document.getElementById('modalError').textContent='Ora de sfârșit trebuie să fie după ora de start.'; return; }
+  const dk = document.getElementById('modalDateEdit').value;
+  if(!dk){ document.getElementById('modalError').textContent='Alege o dată.'; return; }
+
+  const ctx = getBookingArtistContext();
+  const hours = (end-start)/60;
+  const cost = +(hours*(ctx.rate||0)).toFixed(2);
+
+  const snap = await db.collection('slots').where('date','==',dk).get();
+  const overlap = snap.docs.some(d=>{
+    if(d.id === b.slotId) return false; // propriul slot nu se numără ca suprapunere
+    const s = d.data();
+    return s.start < end && s.end > start;
+  });
+  if(overlap){
+    document.getElementById('modalError').textContent = 'Intervalul ales se suprapune cu o altă rezervare.';
+    return;
+  }
+
+  const batch = db.batch();
+  if(b.slotId) batch.delete(db.collection('slots').doc(b.slotId));
+  const newSlotRef = db.collection('slots').doc();
+  batch.set(newSlotRef, {
+    date: dk, start, end,
+    createdBy: currentUser.email,
+    bookingId: b.id
+  });
+  batch.update(db.collection('bookings').doc(b.id), {
+    artistEmail: ctx.email,
+    artistName: ctx.name,
+    date: dk, start, end, cost,
+    slotId: newSlotRef.id
+  });
+
+  try{
+    await batch.commit();
+    closeModal();
+    await refreshAll();
+  }catch(err){
+    document.getElementById('modalError').textContent = 'Eroare la salvare: ' + err.message;
+  }
+}
 
 async function confirmBooking(){
   const start = parseInt(document.getElementById('modalStart').value);
