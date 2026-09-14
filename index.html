@@ -72,6 +72,10 @@
   .totals{font-size:14px;margin-top:10px;}
   .totals b{font-size:18px;}
   .note{font-size:12px;color:var(--muted);margin-top:6px;}
+  .report-artist-block{border-top:1px solid var(--border);padding-top:16px;margin-top:16px;}
+  .report-artist-block:first-child{border-top:none;padding-top:0;margin-top:0;}
+  .report-artist-block h4{margin:0 0 8px;}
+  .invoice-text{background:#f8f9fb;border-radius:6px;padding:10px 12px;font-size:13px;line-height:1.6;margin-top:10px;}
   .add-artist-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;align-items:end;}
   @media (max-width:700px){ .add-artist-form{grid-template-columns:1fr;} }
 </style>
@@ -131,11 +135,11 @@
           <button class="btn-outline small-btn" onclick="shiftSummaryMonth(1)">Luna următoare ›</button>
           <button class="btn-outline small-btn" onclick="goSummaryThisMonth()">Luna curentă</button>
         </div>
-        <div class="totals">Ore rezervate: <b id="sumHours">0</b> h &nbsp;&nbsp;|&nbsp;&nbsp; Cost total: <b id="sumCost">0</b> RON</div>
-        <table style="margin-top:14px;">
+        <table>
           <thead><tr><th>Dată</th><th>Interval</th><th>Ore</th><th>Cost</th></tr></thead>
           <tbody id="sumTableBody"></tbody>
         </table>
+        <div class="totals" style="margin-top:14px;">Ore rezervate: <b id="sumHours">0</b> h &nbsp;&nbsp;|&nbsp;&nbsp; Cost total: <b id="sumCost">0</b> RON</div>
       </div>
     </div>
 
@@ -168,11 +172,8 @@
           <button class="btn-outline small-btn" onclick="shiftReportsMonth(1)">Luna următoare ›</button>
           <button class="btn-outline small-btn" onclick="goReportsThisMonth()">Luna curentă</button>
         </div>
-        <table>
-          <thead><tr><th>Artist</th><th>Ore</th><th>Cost (RON)</th></tr></thead>
-          <tbody id="reportsTableBody"></tbody>
-        </table>
-        <div class="totals" id="reportsTotals" style="margin-top:14px;"></div>
+        <div id="reportsArtistList"></div>
+        <div class="totals" id="reportsTotals" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);"></div>
       </div>
     </div>
 
@@ -820,25 +821,63 @@ function goReportsThisMonth(){ reportsMonth = firstOfMonth(new Date()); renderRe
 async function renderReports(){
   document.getElementById('reportsMonthLabel').textContent = monthLabel(reportsMonth);
   const [monthStart, monthEnd] = monthRangeKeys(reportsMonth);
-  const snap = await db.collection('bookings').where('date','>=',monthStart).where('date','<=',monthEnd).get();
-  const totals = {};
-  let grandHours = 0, grandCost = 0;
-  snap.docs.forEach(d=>{
+  const [bookingsSnap, artistsSnap] = await Promise.all([
+    db.collection('bookings').where('date','>=',monthStart).where('date','<=',monthEnd).get(),
+    db.collection('artists').get()
+  ]);
+
+  const artistsByEmail = {};
+  artistsSnap.docs.forEach(d=>{ const a=d.data(); artistsByEmail[a.email]=a; });
+
+  const byArtist = {}; // email -> { name, rows:[], hours, cost }
+  bookingsSnap.docs.forEach(d=>{
     const r = d.data();
     const key = r.artistEmail;
-    if(!totals[key]) totals[key] = { name:r.artistName||r.artistEmail, hours:0, cost:0 };
-    totals[key].hours += (r.end-r.start)/60;
-    totals[key].cost += r.cost||0;
-    grandHours += (r.end-r.start)/60;
-    grandCost += r.cost||0;
+    if(!byArtist[key]) byArtist[key] = { name:r.artistName||r.artistEmail, rows:[], hours:0, cost:0 };
+    byArtist[key].rows.push(r);
+    byArtist[key].hours += (r.end-r.start)/60;
+    byArtist[key].cost += r.cost||0;
   });
-  const tbody = document.getElementById('reportsTableBody');
-  tbody.innerHTML='';
-  Object.values(totals).sort((a,b)=>a.name.localeCompare(b.name)).forEach(t=>{
-    const tr=document.createElement('tr');
-    tr.innerHTML = '<td>'+t.name+'</td><td>'+t.hours.toFixed(2)+'</td><td>'+t.cost.toFixed(2)+'</td>';
-    tbody.appendChild(tr);
+
+  const list = document.getElementById('reportsArtistList');
+  list.innerHTML = '';
+  let grandHours = 0, grandCost = 0;
+  const emails = Object.keys(byArtist).sort((a,b)=> byArtist[a].name.localeCompare(byArtist[b].name));
+
+  if(emails.length===0){
+    list.innerHTML = '<p class="note">Nu există rezervări în această lună.</p>';
+  }
+
+  emails.forEach(email=>{
+    const info = byArtist[email];
+    info.rows.sort((a,b)=> a.date.localeCompare(b.date) || a.start-b.start);
+    grandHours += info.hours;
+    grandCost += info.cost;
+    const profile = artistsByEmail[email] || {};
+    const rate = profile.hourlyRate || (info.hours>0 ? info.cost/info.hours : 0);
+    const contract = profile.contractInfo || '(necompletat)';
+
+    const block = document.createElement('div');
+    block.className = 'report-artist-block';
+
+    let html = '<h4>'+info.name+' <span class="note" style="display:inline;">('+email+')</span></h4>';
+    html += '<table><thead><tr><th>Dată</th><th>Interval</th><th>Ore</th><th>Cost</th></tr></thead><tbody>';
+    info.rows.forEach(r=>{
+      const h = (r.end-r.start)/60;
+      html += '<tr><td>'+r.date+'</td><td>'+minutesToLabel(r.start)+'–'+minutesToLabel(r.end)+'</td><td>'+h.toFixed(2)+'</td><td>'+(r.cost||0).toFixed(2)+' RON</td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '<div class="totals" style="margin-top:10px;">Total lunar: <b>'+info.hours.toFixed(2)+'</b> h &nbsp;&nbsp;|&nbsp;&nbsp; <b>'+info.cost.toFixed(2)+'</b> RON</div>';
+
+    const invoiceText = 'Chirie sală cu pian - luna ' + monthLabel(reportsMonth) + ', conf. contractului ' + contract + '. ' +
+      'Suma pe oră: ' + rate.toFixed(2) + ' lei. Nr ore: ' + info.hours.toFixed(2) + '. ' +
+      'Suma totală: ' + info.cost.toFixed(2) + ' lei.';
+    html += '<div class="invoice-text">'+invoiceText+'</div>';
+
+    block.innerHTML = html;
+    list.appendChild(block);
   });
+
   document.getElementById('reportsTotals').innerHTML =
     'Total general: <b>'+grandHours.toFixed(2)+'</b> h &nbsp;&nbsp;|&nbsp;&nbsp; <b>'+grandCost.toFixed(2)+'</b> RON';
 }
