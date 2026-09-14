@@ -167,6 +167,16 @@
           <tbody id="artistsTableBody"></tbody>
         </table>
       </div>
+      <div class="card">
+        <h3>Schimbă emailul unui artist</h3>
+        <p class="note">Folosește asta dacă un artist a fost introdus cu un email temporar/greșit — toate rezervările lui (trecute și viitoare) și profilul lui vor fi mutate automat pe noul email, fără pierdere de date. Dacă artistul are deja un cont de autentificare, schimbă-i emailul și acolo, din Firebase Console → Authentication.</p>
+        <div class="add-artist-form">
+          <div><label>Artist existent</label><select id="renameArtistSelect"></select></div>
+          <div><label>Email nou</label><input id="renameArtistNewEmail" placeholder="artist@exemplu.com"></div>
+          <div><button class="btn-primary" style="width:100%;" onclick="renameArtistEmail()">Schimbă emailul</button></div>
+        </div>
+        <div id="renameArtistMsg" class="note"></div>
+      </div>
     </div>
 
     <div id="tab-reports" class="hidden">
@@ -974,6 +984,82 @@ async function renderArtists(){
     tr.lastElementChild.appendChild(editBtn);
     tbody.appendChild(tr);
   });
+  populateRenameArtistSelect();
+}
+function populateRenameArtistSelect(){
+  const sel = document.getElementById('renameArtistSelect');
+  if(!sel) return;
+  const prevValue = sel.value;
+  sel.innerHTML = '';
+  artistsCache.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'')).forEach(a=>{
+    const o = document.createElement('option');
+    o.value = a.email; o.textContent = (a.name||a.email) + ' (' + a.email + ')';
+    sel.appendChild(o);
+  });
+  if(artistsCache.some(a=>a.email===prevValue)) sel.value = prevValue;
+}
+async function runBatchedUpdates(docs, mapFn){
+  const CHUNK = 450; // sub limita de 500 operații/lot a Firestore
+  for(let i=0; i<docs.length; i+=CHUNK){
+    const chunk = docs.slice(i, i+CHUNK);
+    const batch = db.batch();
+    chunk.forEach(d=>{
+      const { ref, data } = mapFn(d);
+      batch.update(ref, data);
+    });
+    await batch.commit();
+  }
+}
+async function renameArtistEmail(){
+  const msg = document.getElementById('renameArtistMsg');
+  msg.textContent=''; msg.style.color='';
+  const oldEmail = document.getElementById('renameArtistSelect').value;
+  const newEmail = document.getElementById('renameArtistNewEmail').value.trim().toLowerCase();
+  if(!oldEmail){ msg.textContent='Alege un artist.'; msg.style.color='var(--danger)'; return; }
+  if(!newEmail || !newEmail.includes('@')){ msg.textContent='Introdu un email nou valid.'; msg.style.color='var(--danger)'; return; }
+  if(newEmail === oldEmail){ msg.textContent='Emailul nou este identic cu cel vechi.'; msg.style.color='var(--danger)'; return; }
+  if(artistsCache.some(a=>a.email===newEmail)){ msg.textContent='Există deja un artist cu acest email.'; msg.style.color='var(--danger)'; return; }
+  const oldArtist = artistsCache.find(a=>a.email===oldEmail);
+  if(!oldArtist){ msg.textContent='Artistul selectat nu a fost găsit.'; msg.style.color='var(--danger)'; return; }
+
+  if(!confirm('Sigur muți TOATE rezervările artistului "'+(oldArtist.name||oldEmail)+'" de pe '+oldEmail+' pe '+newEmail+'? Acțiunea nu poate fi anulată.')) return;
+
+  msg.textContent='Se procesează...'; msg.style.color='var(--muted)';
+  try{
+    // 1. mută profilul artistului pe noul email
+    await db.collection('artists').doc(sanitizeEmailId(newEmail)).set({
+      email: newEmail,
+      name: oldArtist.name||'',
+      hourlyRate: oldArtist.hourlyRate||0,
+      contractInfo: oldArtist.contractInfo||'',
+      accessCode: oldArtist.accessCode||''
+    });
+    await db.collection('artists').doc(oldArtist.id).delete();
+
+    // 2. mută toate rezervările existente
+    const bookingsSnap = await db.collection('bookings').where('artistEmail','==',oldEmail).get();
+    await runBatchedUpdates(bookingsSnap.docs, d=>({
+      ref: db.collection('bookings').doc(d.id),
+      data: { artistEmail: newEmail }
+    }));
+
+    // 3. mută cererile de ștergere (dacă există)
+    const reqSnap = await db.collection('deleteRequests').where('artistEmail','==',oldEmail).get();
+    await runBatchedUpdates(reqSnap.docs, d=>({
+      ref: db.collection('deleteRequests').doc(d.id),
+      data: { artistEmail: newEmail }
+    }));
+
+    msg.textContent = 'Gata! '+bookingsSnap.size+' rezervări mutate pe '+newEmail+'. Dacă artistul are deja cont, nu uita să-i schimbi și emailul de autentificare din Firebase Console → Authentication.';
+    msg.style.color='var(--success)';
+    document.getElementById('renameArtistNewEmail').value='';
+    await loadArtistsCache();
+    renderArtists();
+    await refreshAll();
+  }catch(err){
+    msg.textContent = 'Eroare: ' + err.message;
+    msg.style.color='var(--danger)';
+  }
 }
 async function saveArtist(){
   const email = document.getElementById('newArtistEmail').value.trim().toLowerCase();
