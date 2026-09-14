@@ -436,7 +436,7 @@ function renderCalendar(){
     for(let h=0; h<hourCount; h++){
       const line = document.createElement('div');
       line.className = 'hour-line';
-      line.onclick = (ev)=> handleCellClick(ev, d, DAY_START+h*60, line);
+      line.onclick = ()=> openBookingModal(d, DAY_START+h*60);
       col.appendChild(line);
     }
     // blocuri: ocupate (busy) + ale mele
@@ -488,14 +488,6 @@ function makeBookingBlock(b, kind, hourCount, isAdminView){
 
 // ---------- Creare rezervare ----------
 let modalCtx = null;
-function handleCellClick(ev, date, hourStartMin, lineEl){
-  const rect = lineEl.getBoundingClientRect();
-  const offsetY = ev.clientY - rect.top;
-  const minuteWithinHour = Math.round((offsetY/rect.height)*60/SLOT_STEP)*SLOT_STEP;
-  let start = hourStartMin + Math.min(minuteWithinHour, 60-SLOT_STEP);
-  start = Math.max(DAY_START, Math.min(start, DAY_END-SLOT_STEP));
-  openBookingModal(date, start);
-}
 function openBookingModal(date, suggestedStart){
   modalCtx = { date };
   document.getElementById('modalDate').value = DAY_NAMES[(date.getDay()+6)%7] + ', ' + formatDateRo(date);
