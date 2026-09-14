@@ -68,7 +68,7 @@
   .totals{font-size:14px;margin-top:10px;}
   .totals b{font-size:18px;}
   .note{font-size:12px;color:var(--muted);margin-top:6px;}
-  .add-artist-form{display:grid;grid-template-columns:1fr 1fr 120px 100px;gap:10px;align-items:end;}
+  .add-artist-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;align-items:end;}
   @media (max-width:700px){ .add-artist-form{grid-template-columns:1fr;} }
 </style>
 </head>
@@ -114,6 +114,11 @@
 
     <div id="tab-summary" class="hidden">
       <div class="card">
+        <h3>Informațiile mele</h3>
+        <p style="margin:4px 0;">Nr./data contract: <b id="myContract">-</b></p>
+        <p style="margin:4px 0 0;">Cod de acces sală: <b id="myAccessCode">-</b></p>
+      </div>
+      <div class="card">
         <h3>Rezumatul meu</h3>
         <div class="week-nav">
           <button class="btn-outline small-btn" onclick="shiftSummaryMonth(-1)">‹ Luna anterioară</button>
@@ -137,11 +142,13 @@
           <div><label>Email</label><input id="newArtistEmail" placeholder="artist@exemplu.com"></div>
           <div><label>Nume</label><input id="newArtistName" placeholder="Nume Prenume"></div>
           <div><label>Tarif/oră (RON)</label><input id="newArtistRate" type="number" min="0" step="1"></div>
+          <div><label>Nr./data contract</label><input id="newArtistContract" placeholder="ex. 12/15.03.2026"></div>
+          <div><label>Cod de acces sală</label><input id="newArtistAccessCode" placeholder="ex. 4521"></div>
           <div><button class="btn-primary" style="width:100%;" onclick="saveArtist()">Salvează</button></div>
         </div>
         <div id="artistFormMsg" class="note"></div>
         <table style="margin-top:18px;">
-          <thead><tr><th>Nume</th><th>Email</th><th>Tarif/oră</th><th></th></tr></thead>
+          <thead><tr><th>Nume</th><th>Email</th><th>Tarif/oră</th><th>Nr./data contract</th><th>Cod acces</th><th></th></tr></thead>
           <tbody id="artistsTableBody"></tbody>
         </table>
       </div>
@@ -301,7 +308,7 @@ auth.onAuthStateChanged(async (user)=>{
   }
   const email = user.email.toLowerCase();
   const isAdmin = email === ADMIN_EMAIL.toLowerCase();
-  let name = email, hourlyRate = 0;
+  let name = email, hourlyRate = 0, contractInfo = '', accessCode = '';
 
   if(!isAdmin){
     let doc = null;
@@ -320,9 +327,11 @@ auth.onAuthStateChanged(async (user)=>{
     }
     name = doc.data().name || email;
     hourlyRate = doc.data().hourlyRate || 0;
+    contractInfo = doc.data().contractInfo || '';
+    accessCode = doc.data().accessCode || '';
   }
 
-  currentUser = { email, isAdmin, name, hourlyRate };
+  currentUser = { email, isAdmin, name, hourlyRate, contractInfo, accessCode };
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('appScreen').classList.remove('hidden');
   document.getElementById('whoAmI').textContent = (isAdmin? '👤 Admin — ' : '🎤 ') + name;
@@ -699,6 +708,8 @@ function shiftSummaryMonth(n){ summaryMonth = addMonths(summaryMonth, n); render
 function goSummaryThisMonth(){ summaryMonth = firstOfMonth(new Date()); renderSummary(); }
 
 async function renderSummary(){
+  document.getElementById('myContract').textContent = currentUser.contractInfo || '(necompletat)';
+  document.getElementById('myAccessCode').textContent = currentUser.accessCode || '(necompletat)';
   document.getElementById('summaryMonthLabel').textContent = monthLabel(summaryMonth);
   const [monthStart, monthEnd] = monthRangeKeys(summaryMonth);
   const snap = await db.collection('bookings').where('artistEmail','==',currentUser.email).get();
@@ -727,13 +738,15 @@ async function renderArtists(){
   tbody.innerHTML='';
   artistsCache.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).forEach(a=>{
     const tr=document.createElement('tr');
-    tr.innerHTML = '<td>'+(a.name||'')+'</td><td>'+a.email+'</td><td>'+(a.hourlyRate||0)+' RON</td><td></td>';
+    tr.innerHTML = '<td>'+(a.name||'')+'</td><td>'+a.email+'</td><td>'+(a.hourlyRate||0)+' RON</td><td>'+(a.contractInfo||'')+'</td><td>'+(a.accessCode||'')+'</td><td></td>';
     const editBtn=document.createElement('button');
     editBtn.className='btn-outline small-btn'; editBtn.textContent='Editează';
     editBtn.onclick=()=>{
       document.getElementById('newArtistEmail').value=a.email;
       document.getElementById('newArtistName').value=a.name||'';
       document.getElementById('newArtistRate').value=a.hourlyRate||0;
+      document.getElementById('newArtistContract').value=a.contractInfo||'';
+      document.getElementById('newArtistAccessCode').value=a.accessCode||'';
       window.scrollTo(0,0);
     };
     tr.lastElementChild.appendChild(editBtn);
@@ -744,13 +757,17 @@ async function saveArtist(){
   const email = document.getElementById('newArtistEmail').value.trim().toLowerCase();
   const name = document.getElementById('newArtistName').value.trim();
   const rate = parseFloat(document.getElementById('newArtistRate').value) || 0;
+  const contractInfo = document.getElementById('newArtistContract').value.trim();
+  const accessCode = document.getElementById('newArtistAccessCode').value.trim();
   const msg = document.getElementById('artistFormMsg');
   if(!email || !name){ msg.textContent='Completează email și nume.'; msg.style.color='var(--danger)'; return; }
-  await db.collection('artists').doc(sanitizeEmailId(email)).set({ email, name, hourlyRate: rate }, {merge:true});
+  await db.collection('artists').doc(sanitizeEmailId(email)).set({ email, name, hourlyRate: rate, contractInfo, accessCode }, {merge:true});
   msg.textContent='Salvat.'; msg.style.color='var(--success)';
   document.getElementById('newArtistEmail').value='';
   document.getElementById('newArtistName').value='';
   document.getElementById('newArtistRate').value='';
+  document.getElementById('newArtistContract').value='';
+  document.getElementById('newArtistAccessCode').value='';
   renderArtists();
 }
 
