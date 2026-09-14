@@ -108,13 +108,19 @@
         <div class="cal-wrap">
           <div class="cal-grid" id="calGrid"></div>
         </div>
-        <p class="note">Click pe o celulă liberă pentru a face o rezervare. Blocurile gri sunt ocupate de alți artiști (fără detalii). Blocurile albastre sunt rezervările tale — click pe ✕ pentru a anula.</p>
+        <p class="note" id="calNote"></p>
       </div>
     </div>
 
     <div id="tab-summary" class="hidden">
       <div class="card">
-        <h3>Rezumatul meu — luna curentă</h3>
+        <h3>Rezumatul meu</h3>
+        <div class="week-nav">
+          <button class="btn-outline small-btn" onclick="shiftSummaryMonth(-1)">‹ Luna anterioară</button>
+          <span id="summaryMonthLabel"></span>
+          <button class="btn-outline small-btn" onclick="shiftSummaryMonth(1)">Luna următoare ›</button>
+          <button class="btn-outline small-btn" onclick="goSummaryThisMonth()">Luna curentă</button>
+        </div>
         <div class="totals">Ore rezervate: <b id="sumHours">0</b> h &nbsp;&nbsp;|&nbsp;&nbsp; Cost total: <b id="sumCost">0</b> RON</div>
         <table style="margin-top:14px;">
           <thead><tr><th>Dată</th><th>Interval</th><th>Ore</th><th>Cost</th></tr></thead>
@@ -143,10 +149,28 @@
 
     <div id="tab-reports" class="hidden">
       <div class="card">
-        <h3>Raport ore &amp; cost — luna curentă</h3>
+        <h3>Raport ore &amp; cost</h3>
+        <div class="week-nav">
+          <button class="btn-outline small-btn" onclick="shiftReportsMonth(-1)">‹ Luna anterioară</button>
+          <span id="reportsMonthLabel"></span>
+          <button class="btn-outline small-btn" onclick="shiftReportsMonth(1)">Luna următoare ›</button>
+          <button class="btn-outline small-btn" onclick="goReportsThisMonth()">Luna curentă</button>
+        </div>
         <table>
           <thead><tr><th>Artist</th><th>Ore</th><th>Cost (RON)</th></tr></thead>
           <tbody id="reportsTableBody"></tbody>
+        </table>
+        <div class="totals" id="reportsTotals" style="margin-top:14px;"></div>
+      </div>
+    </div>
+
+    <div id="tab-requests" class="hidden">
+      <div class="card">
+        <h3>Cereri de ștergere</h3>
+        <p class="note" id="requestsEmptyNote"></p>
+        <table>
+          <thead><tr><th>Artist</th><th>Dată</th><th>Interval</th><th></th></tr></thead>
+          <tbody id="requestsTableBody"></tbody>
         </table>
       </div>
     </div>
@@ -161,6 +185,21 @@
     <div class="row">
       <div><label>Ora start</label><select id="modalStart"></select></div>
       <div><label>Ora sfârșit</label><select id="modalEnd"></select></div>
+    </div>
+    <div style="margin-top:12px;">
+      <label style="display:flex;align-items:center;gap:6px;margin-top:0;">
+        <input type="checkbox" id="modalRepeat" onchange="toggleRepeatOptions()" style="width:auto;"> Repetă săptămânal
+      </label>
+      <div id="repeatOptions" class="hidden" style="margin-top:8px;">
+        <label style="display:flex;align-items:center;gap:6px;margin-top:6px;">
+          <input type="radio" name="repeatMode" value="until" checked style="width:auto;"> Până la data:
+          <input type="date" id="modalRepeatUntil" style="width:auto;flex:1;">
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;margin-top:6px;">
+          <input type="radio" name="repeatMode" value="unlimited" style="width:auto;"> Nelimitat (implicit 1 an înainte)
+        </label>
+        <p class="note">Din motive de siguranță, se creează cel mult 104 rezervări (~2 ani) dintr-o singură serie.</p>
+      </div>
     </div>
     <div class="preview" id="modalPreview"></div>
     <div id="modalError" class="modal-error"></div>
@@ -211,6 +250,9 @@ let myBookingsCache = [];   // rezervările proprii (cu detalii), pt săptămân
 let busySlotsCache = [];    // sloturile ocupate de oricine (fără identitate), pt săptămâna afișată
 let allBookingsCache = [];  // doar pt admin: toate rezervările săpt. afișate
 let artistsCache = [];      // doar pt admin
+let summaryMonth = firstOfMonth(new Date());   // luna afișată în "Rezumatul meu"
+let reportsMonth = firstOfMonth(new Date());   // luna afișată în "Rapoarte" (admin)
+const MONTH_NAMES = ['Ianuarie','Februarie','Martie','Aprilie','Mai','Iunie','Iulie','August','Septembrie','Octombrie','Noiembrie','Decembrie'];
 
 // ---------- Utilitare ----------
 function pad2(n){ return n.toString().padStart(2,'0'); }
@@ -226,6 +268,14 @@ function getMonday(d){
 }
 function addDays(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; }
 function sanitizeEmailId(email){ return email.toLowerCase().trim().replace(/[^a-z0-9]/g,'_'); }
+function firstOfMonth(d){ return new Date(d.getFullYear(), d.getMonth(), 1); }
+function addMonths(d,n){ return new Date(d.getFullYear(), d.getMonth()+n, 1); }
+function monthRangeKeys(d){
+  const start = dateKey(new Date(d.getFullYear(), d.getMonth(), 1));
+  const end = dateKey(new Date(d.getFullYear(), d.getMonth()+1, 0));
+  return [start, end];
+}
+function monthLabel(d){ return MONTH_NAMES[d.getMonth()] + ' ' + d.getFullYear(); }
 
 // ---------- Autentificare ----------
 function doLogin(){
@@ -291,6 +341,7 @@ function buildTabs(){
   if(currentUser.isAdmin){
     tabs.push(['artists','Artiști']);
     tabs.push(['reports','Rapoarte']);
+    tabs.push(['requests','Cereri ștergere']);
   } else {
     tabs.push(['summary','Rezumatul meu']);
   }
@@ -303,13 +354,14 @@ function buildTabs(){
   });
 }
 function showTab(){
-  ['calendar','summary','artists','reports'].forEach(id=>{
+  ['calendar','summary','artists','reports','requests'].forEach(id=>{
     document.getElementById('tab-'+id).classList.toggle('hidden', id!==activeTab);
   });
   if(activeTab==='calendar') renderCalendar();
   if(activeTab==='summary') renderSummary();
   if(activeTab==='artists') renderArtists();
   if(activeTab==='reports') renderReports();
+  if(activeTab==='requests') renderRequests();
 }
 
 // ---------- Navigare săptămână ----------
@@ -322,6 +374,7 @@ async function refreshAll(){
   if(activeTab==='summary') renderSummary();
   if(activeTab==='artists') renderArtists();
   if(activeTab==='reports') renderReports();
+  if(activeTab==='requests') renderRequests();
 }
 
 // ---------- Încărcare date săptămână ----------
@@ -349,6 +402,9 @@ async function loadWeekData(){
 function renderCalendar(){
   document.getElementById('weekLabel').textContent =
     formatDateRo(weekStart) + ' – ' + formatDateRo(addDays(weekStart,6));
+  document.getElementById('calNote').textContent = currentUser.isAdmin
+    ? 'Click pe o celulă liberă pentru a face o rezervare. Click pe ✕ pentru a anula orice rezervare. 🔁 = rezervare dintr-o serie recurentă.'
+    : 'Click pe o celulă liberă pentru a face o rezervare. Blocurile gri sunt ocupate de alți artiști (fără detalii). Blocurile albastre sunt rezervările tale — click pe 🗑 pentru a cere ștergerea (necesită aprobarea administratorului).';
 
   const hourCount = (DAY_END-DAY_START)/60;
   const grid = document.getElementById('calGrid');
@@ -411,13 +467,20 @@ function makeBookingBlock(b, kind, hourCount, isAdminView){
   if(kind==='busy'){
     el.textContent = 'Ocupat';
   } else {
-    el.innerHTML = '<b>'+ (isAdminView ? (b.artistName||b.artistEmail) : 'Rezervarea ta') +'</b>' + minutesToLabel(b.start)+'–'+minutesToLabel(b.end);
-    if(!isAdminView || currentUser.isAdmin){
+    const label = (b.seriesId ? '🔁 ' : '') + (isAdminView ? (b.artistName||b.artistEmail) : 'Rezervarea ta');
+    el.innerHTML = '<b>'+label+'</b>' + minutesToLabel(b.start)+'–'+minutesToLabel(b.end);
+    if(currentUser.isAdmin){
       const x = document.createElement('span');
       x.className='cancel-x'; x.textContent='✕';
-      x.title='Anulează';
+      x.title='Anulează (direct, ca admin)';
       x.onclick=(ev)=>{ ev.stopPropagation(); cancelBooking(b); };
       el.appendChild(x);
+    } else {
+      const req = document.createElement('span');
+      req.className='cancel-x'; req.textContent='🗑';
+      req.title='Cere ștergere';
+      req.onclick=(ev)=>{ ev.stopPropagation(); requestDeleteBooking(b); };
+      el.appendChild(req);
     }
   }
   return el;
@@ -459,7 +522,16 @@ function openBookingModal(date, suggestedStart){
   endSel.onchange = updatePreview;
   fillEnd();
   document.getElementById('modalError').textContent='';
+  document.getElementById('modalRepeat').checked = false;
+  document.getElementById('repeatOptions').classList.add('hidden');
+  document.querySelector('input[name="repeatMode"][value="until"]').checked = true;
+  const untilInput = document.getElementById('modalRepeatUntil');
+  untilInput.min = dateKey(date);
+  untilInput.value = '';
   document.getElementById('bookingModalBg').classList.remove('hidden');
+}
+function toggleRepeatOptions(){
+  document.getElementById('repeatOptions').classList.toggle('hidden', !document.getElementById('modalRepeat').checked);
 }
 function updatePreview(){
   const start = parseInt(document.getElementById('modalStart').value);
@@ -474,49 +546,87 @@ function closeModal(){ document.getElementById('bookingModalBg').classList.add('
 async function confirmBooking(){
   const start = parseInt(document.getElementById('modalStart').value);
   const end = parseInt(document.getElementById('modalEnd').value);
-  const dk = dateKey(modalCtx.date);
+  const baseDate = modalCtx.date;
   document.getElementById('modalError').textContent = '';
   if(end<=start){ document.getElementById('modalError').textContent='Ora de sfârșit trebuie să fie după ora de start.'; return; }
 
-  // verificare suprapunere: interogăm toate sloturile ocupate din ziua respectivă
-  const snap = await db.collection('slots').where('date','==',dk).get();
-  const overlap = snap.docs.some(d=>{
-    const s = d.data();
-    return s.start < end && s.end > start;
-  });
-  if(overlap){
-    document.getElementById('modalError').textContent = 'Interval deja ocupat — alege alt interval.';
-    return;
+  const repeatOn = document.getElementById('modalRepeat').checked;
+  const MAX_OCCURRENCES = 104; // limită de siguranță (~2 ani), valabilă și pentru "până la dată"
+  let occurrenceDates = [baseDate];
+
+  if(repeatOn){
+    const mode = document.querySelector('input[name="repeatMode"]:checked').value;
+    let untilDate;
+    if(mode==='until'){
+      const untilStr = document.getElementById('modalRepeatUntil').value;
+      if(!untilStr){ document.getElementById('modalError').textContent='Alege o dată limită pentru repetare (sau bifează "Nelimitat").'; return; }
+      untilDate = new Date(untilStr+'T00:00:00');
+      if(untilDate < baseDate){ document.getElementById('modalError').textContent='Data limită trebuie să fie după data rezervării.'; return; }
+    } else {
+      untilDate = addDays(baseDate, 52*7); // "nelimitat" = implicit 1 an înainte
+    }
+    occurrenceDates = [];
+    let d = new Date(baseDate);
+    let count = 0;
+    while(d <= untilDate && count < MAX_OCCURRENCES){
+      occurrenceDates.push(new Date(d));
+      d = addDays(d, 7);
+      count++;
+    }
   }
 
   const hours = (end-start)/60;
   const cost = +(hours*(currentUser.hourlyRate||0)).toFixed(2);
-
-  const bookingRef = db.collection('bookings').doc();
-  const slotRef = db.collection('slots').doc();
+  const seriesId = (repeatOn && occurrenceDates.length>1) ? db.collection('bookings').doc().id : null;
   const batch = db.batch();
-  batch.set(bookingRef, {
-    artistEmail: currentUser.email,
-    artistName: currentUser.name,
-    date: dk, start, end, cost,
-    slotId: slotRef.id,
-    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-  });
-  batch.set(slotRef, {
-    date: dk, start, end,
-    createdBy: currentUser.email,
-    bookingId: bookingRef.id
-  });
+  const skipped = [];
+  let createdCount = 0;
+
+  for(const occDate of occurrenceDates){
+    const dk = dateKey(occDate);
+    const snap = await db.collection('slots').where('date','==',dk).get();
+    const overlap = snap.docs.some(d=>{
+      const s = d.data();
+      return s.start < end && s.end > start;
+    });
+    if(overlap){ skipped.push(formatDateRo(occDate)); continue; }
+    const bookingRef = db.collection('bookings').doc();
+    const slotRef = db.collection('slots').doc();
+    batch.set(bookingRef, {
+      artistEmail: currentUser.email,
+      artistName: currentUser.name,
+      date: dk, start, end, cost,
+      slotId: slotRef.id,
+      seriesId: seriesId,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    batch.set(slotRef, {
+      date: dk, start, end,
+      createdBy: currentUser.email,
+      bookingId: bookingRef.id
+    });
+    createdCount++;
+  }
+
+  if(createdCount===0){
+    document.getElementById('modalError').textContent = 'Toate datele selectate sunt deja ocupate — alege alt interval.';
+    return;
+  }
+
   try{
     await batch.commit();
     closeModal();
     await refreshAll();
+    if(skipped.length){
+      alert('S-au creat '+createdCount+' rezervări. Au fost sărite (deja ocupate): '+skipped.join(', '));
+    }
   }catch(err){
     document.getElementById('modalError').textContent = 'Eroare la salvare: ' + err.message;
   }
 }
 
 async function cancelBooking(b){
+  // folosit doar de admin — artiștii nu au acces la ștergere directă (impus și de regulile Firestore)
   if(!confirm('Anulezi această rezervare?')) return;
   const batch = db.batch();
   batch.delete(db.collection('bookings').doc(b.id));
@@ -525,11 +635,80 @@ async function cancelBooking(b){
   await refreshAll();
 }
 
+async function requestDeleteBooking(b){
+  if(!confirm('Trimiți o cerere de ștergere către administrator pentru această rezervare?')) return;
+  await db.collection('deleteRequests').add({
+    bookingId: b.id,
+    artistEmail: currentUser.email,
+    artistName: currentUser.name,
+    date: b.date, start: b.start, end: b.end,
+    status: 'pending',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  // cel mai de încredere mecanism e lista din tab-ul "Cereri ștergere" a adminului;
+  // în plus, deschidem (dacă e posibil) un email pre-completat, ca notificare suplimentară
+  const subject = encodeURIComponent('Cerere ștergere rezervare - ' + currentUser.name);
+  const body = encodeURIComponent(
+    'Artist: ' + currentUser.name + ' (' + currentUser.email + ')\n' +
+    'Data: ' + b.date + '\n' +
+    'Interval: ' + minutesToLabel(b.start) + '–' + minutesToLabel(b.end) + '\n\n' +
+    'Te rog aprobă cererea din aplicație, tab-ul "Cereri ștergere".'
+  );
+  window.location.href = 'mailto:' + ADMIN_EMAIL + '?subject=' + subject + '&body=' + body;
+  alert('Cererea a fost trimisă administratorului (vizibilă în tab-ul lui "Cereri ștergere").');
+  await refreshAll();
+}
+
+async function renderRequests(){
+  const snap = await db.collection('deleteRequests').where('status','==','pending').get();
+  const rows = snap.docs.map(d=>({id:d.id, ...d.data()}))
+    .sort((a,b)=> a.date.localeCompare(b.date) || a.start-b.start);
+  const tbody = document.getElementById('requestsTableBody');
+  tbody.innerHTML = '';
+  document.getElementById('requestsEmptyNote').textContent = rows.length ? '' : 'Nu există cereri de ștergere în așteptare.';
+  rows.forEach(r=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td>'+r.artistName+'</td><td>'+r.date+'</td><td>'+minutesToLabel(r.start)+'–'+minutesToLabel(r.end)+'</td><td></td>';
+    const approveBtn = document.createElement('button');
+    approveBtn.className='btn-primary small-btn'; approveBtn.textContent='Aprobă'; approveBtn.style.marginRight='6px';
+    approveBtn.onclick = ()=> approveDeleteRequest(r);
+    const rejectBtn = document.createElement('button');
+    rejectBtn.className='btn-outline small-btn'; rejectBtn.textContent='Respinge';
+    rejectBtn.onclick = ()=> rejectDeleteRequest(r);
+    tr.lastElementChild.appendChild(approveBtn);
+    tr.lastElementChild.appendChild(rejectBtn);
+    tbody.appendChild(tr);
+  });
+}
+
+async function approveDeleteRequest(r){
+  if(!confirm('Aprobi ștergerea rezervării din '+r.date+' ('+minutesToLabel(r.start)+'–'+minutesToLabel(r.end)+')?')) return;
+  const bookingSnap = await db.collection('bookings').doc(r.bookingId).get();
+  const batch = db.batch();
+  if(bookingSnap.exists){
+    const bd = bookingSnap.data();
+    batch.delete(db.collection('bookings').doc(r.bookingId));
+    if(bd.slotId) batch.delete(db.collection('slots').doc(bd.slotId));
+  }
+  batch.delete(db.collection('deleteRequests').doc(r.id));
+  await batch.commit();
+  await renderRequests();
+  await refreshAll();
+}
+
+async function rejectDeleteRequest(r){
+  if(!confirm('Respingi această cerere de ștergere? Rezervarea rămâne activă.')) return;
+  await db.collection('deleteRequests').doc(r.id).delete();
+  await renderRequests();
+}
+
 // ---------- Rezumatul artistului ----------
+function shiftSummaryMonth(n){ summaryMonth = addMonths(summaryMonth, n); renderSummary(); }
+function goSummaryThisMonth(){ summaryMonth = firstOfMonth(new Date()); renderSummary(); }
+
 async function renderSummary(){
-  const now = new Date();
-  const monthStart = dateKey(new Date(now.getFullYear(), now.getMonth(), 1));
-  const monthEnd = dateKey(new Date(now.getFullYear(), now.getMonth()+1, 0));
+  document.getElementById('summaryMonthLabel').textContent = monthLabel(summaryMonth);
+  const [monthStart, monthEnd] = monthRangeKeys(summaryMonth);
   const snap = await db.collection('bookings').where('artistEmail','==',currentUser.email).get();
   const rows = snap.docs.map(d=>d.data())
     .filter(r=> r.date>=monthStart && r.date<=monthEnd)
@@ -584,18 +763,23 @@ async function saveArtist(){
 }
 
 // ---------- Admin: rapoarte ----------
+function shiftReportsMonth(n){ reportsMonth = addMonths(reportsMonth, n); renderReports(); }
+function goReportsThisMonth(){ reportsMonth = firstOfMonth(new Date()); renderReports(); }
+
 async function renderReports(){
-  const now = new Date();
-  const monthStart = dateKey(new Date(now.getFullYear(), now.getMonth(), 1));
-  const monthEnd = dateKey(new Date(now.getFullYear(), now.getMonth()+1, 0));
+  document.getElementById('reportsMonthLabel').textContent = monthLabel(reportsMonth);
+  const [monthStart, monthEnd] = monthRangeKeys(reportsMonth);
   const snap = await db.collection('bookings').where('date','>=',monthStart).where('date','<=',monthEnd).get();
   const totals = {};
+  let grandHours = 0, grandCost = 0;
   snap.docs.forEach(d=>{
     const r = d.data();
     const key = r.artistEmail;
     if(!totals[key]) totals[key] = { name:r.artistName||r.artistEmail, hours:0, cost:0 };
     totals[key].hours += (r.end-r.start)/60;
     totals[key].cost += r.cost||0;
+    grandHours += (r.end-r.start)/60;
+    grandCost += r.cost||0;
   });
   const tbody = document.getElementById('reportsTableBody');
   tbody.innerHTML='';
@@ -604,6 +788,8 @@ async function renderReports(){
     tr.innerHTML = '<td>'+t.name+'</td><td>'+t.hours.toFixed(2)+'</td><td>'+t.cost.toFixed(2)+'</td>';
     tbody.appendChild(tr);
   });
+  document.getElementById('reportsTotals').innerHTML =
+    'Total general: <b>'+grandHours.toFixed(2)+'</b> h &nbsp;&nbsp;|&nbsp;&nbsp; <b>'+grandCost.toFixed(2)+'</b> RON';
 }
 </script>
 </body>
