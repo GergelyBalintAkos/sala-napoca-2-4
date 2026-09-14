@@ -37,22 +37,24 @@
   /* calendar */
   .week-nav{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
   .week-nav span{font-weight:600;}
-  .day-tabs{display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;padding-bottom:2px;}
-  .day-tabs button{flex:0 0 auto;padding:8px 10px;font-size:12px;line-height:1.3;white-space:nowrap;}
   .cal-wrap{overflow-x:auto;}
   .cal-grid{display:grid;grid-template-columns:56px repeat(7,minmax(110px,1fr));min-width:850px;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
-  .cal-grid.cal-grid-mobile{grid-template-columns:48px 1fr;min-width:0;}
+  .cal-grid.cal-grid-mobile{grid-template-columns:24px repeat(7,1fr);min-width:0;}
   .cal-head{background:#f8f9fb;padding:8px 4px;text-align:center;font-size:12px;font-weight:600;border-bottom:1px solid var(--border);border-left:1px solid var(--border);}
+  .cal-grid-mobile .cal-head{font-size:9px;padding:3px 1px;}
   .cal-head:first-child{border-left:none;}
   .cal-head small{display:block;font-weight:400;color:var(--muted);}
+  .cal-grid-mobile .cal-head small{font-size:8px;}
   .hour-label{font-size:11px;color:var(--muted);text-align:right;padding:2px 6px;border-top:1px solid var(--border);height:48px;}
+  .cal-grid-mobile .hour-label{font-size:8px;padding:0 2px;}
   .day-col{position:relative;border-left:1px solid var(--border);border-top:1px solid var(--border);}
   .day-col .hour-line{height:48px;border-bottom:1px dashed #eef0f3;cursor:pointer;}
   .day-col .hour-line:hover{background:#f5f8ff;}
-  .cal-grid-mobile .block{font-size:13px;padding:6px 8px;}
-  .block{position:absolute;left:2px;right:2px;border-radius:5px;font-size:11px;padding:3px 5px;overflow:hidden;line-height:1.3;cursor:default;}
+  .block{position:absolute;left:1px;right:1px;border-radius:5px;font-size:11px;padding:3px 5px;overflow:hidden;line-height:1.3;cursor:pointer;}
+  .cal-grid-mobile .block{font-size:0;padding:0;border-radius:2px;}
+  .cal-grid-mobile .block .cancel-x{display:none;}
   .block.busy{background:var(--busy);color:#475569;}
-  .block.mine{background:var(--mine-light);border:1px solid var(--mine);color:#1e3a8a;cursor:pointer;}
+  .block.mine{background:var(--mine-light);border:1px solid var(--mine);color:#1e3a8a;}
   .block.mine b{display:block;}
   .block .cancel-x{position:absolute;top:1px;right:3px;font-weight:700;cursor:pointer;color:#1e3a8a;}
   /* modal */
@@ -113,7 +115,6 @@
           <button class="btn-outline small-btn" onclick="shiftWeek(1)">Săpt. următoare ›</button>
           <button class="btn-outline small-btn" onclick="goToday()">Azi</button>
         </div>
-        <div class="day-tabs hidden" id="dayTabs"></div>
         <div class="cal-wrap">
           <div class="cal-grid" id="calGrid"></div>
         </div>
@@ -182,7 +183,7 @@
         <h3>Cereri de ștergere</h3>
         <p class="note" id="requestsEmptyNote"></p>
         <table>
-          <thead><tr><th>Artist</th><th>Dată</th><th>Interval</th><th></th></tr></thead>
+          <thead><tr><th>Artist</th><th>Dată</th><th>Interval</th><th>Tip</th><th></th></tr></thead>
           <tbody id="requestsTableBody"></tbody>
         </table>
       </div>
@@ -223,6 +224,29 @@
   </div>
 </div>
 
+<div id="bookingDetailModalBg" class="modal-bg hidden">
+  <div class="modal">
+    <h3 id="detailTitle">Rezervare</h3>
+    <p style="margin:4px 0;">Dată: <b id="detailDate"></b></p>
+    <p style="margin:4px 0;">Interval: <b id="detailInterval"></b></p>
+    <p id="detailArtistRow" class="hidden" style="margin:4px 0;">Artist: <b id="detailArtist"></b></p>
+    <p id="detailSeriesNote" class="note hidden">🔁 Parte dintr-o serie recurentă (repetare săptămânală).</p>
+    <div class="actions" id="detailActions" style="flex-direction:column;align-items:stretch;gap:8px;margin-top:16px;"></div>
+  </div>
+</div>
+
+<div id="seriesDeleteModalBg" class="modal-bg hidden">
+  <div class="modal">
+    <h3>Rezervare din serie recurentă</h3>
+    <p class="note" id="seriesDeleteText"></p>
+    <div class="actions" style="flex-direction:column;align-items:stretch;gap:8px;margin-top:16px;">
+      <button class="btn-primary" style="width:100%;" onclick="seriesDeleteChoice('single')">Doar această dată</button>
+      <button class="btn-danger" style="width:100%;" onclick="seriesDeleteChoice('all')">Această dată și toată seria</button>
+      <button class="btn-outline" style="width:100%;" onclick="closeSeriesDeleteModal()">Renunță</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===================== FIREBASE SDK (compat, nu necesită build tools) ===================== -->
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
@@ -258,7 +282,6 @@ const DAY_NAMES = ['Luni','Marți','Miercuri','Joi','Vineri','Sâmbătă','Dumin
 
 let currentUser = null;   // { email, isAdmin, name, hourlyRate }
 let weekStart = getMonday(new Date());
-let selectedDayIndex = defaultDayIndexForWeek(weekStart); // index (0=Luni) afișat pe telefon
 let activeTab = 'calendar';
 let myBookingsCache = [];   // rezervările proprii (cu detalii), pt săptămâna afișată
 let busySlotsCache = [];    // sloturile ocupate de oricine (fără identitate), pt săptămâna afișată
@@ -291,11 +314,6 @@ function monthRangeKeys(d){
 }
 function monthLabel(d){ return MONTH_NAMES[d.getMonth()] + ' ' + d.getFullYear(); }
 function isMobile(){ return window.matchMedia('(max-width:700px)').matches; }
-function defaultDayIndexForWeek(ws){
-  const today = new Date();
-  if(dateKey(getMonday(today)) === dateKey(ws)) return (today.getDay()+6)%7;
-  return 0;
-}
 
 // ---------- Autentificare ----------
 function doLogin(){
@@ -352,7 +370,6 @@ auth.onAuthStateChanged(async (user)=>{
   buildTabs();
   showTab();
   weekStart = getMonday(new Date());
-  selectedDayIndex = defaultDayIndexForWeek(weekStart);
   await refreshAll();
 });
 
@@ -388,8 +405,8 @@ function showTab(){
 }
 
 // ---------- Navigare săptămână ----------
-function shiftWeek(n){ weekStart = addDays(weekStart, 7*n); selectedDayIndex = defaultDayIndexForWeek(weekStart); refreshAll(); }
-function goToday(){ weekStart = getMonday(new Date()); selectedDayIndex = defaultDayIndexForWeek(weekStart); refreshAll(); }
+function shiftWeek(n){ weekStart = addDays(weekStart, 7*n); refreshAll(); }
+function goToday(){ weekStart = getMonday(new Date()); refreshAll(); }
 
 async function refreshAll(){
   await loadWeekData();
@@ -422,45 +439,28 @@ async function loadWeekData(){
 }
 
 // ---------- Calendar ----------
-function buildDayTabs(){
-  const wrap = document.getElementById('dayTabs');
-  wrap.innerHTML = '';
-  for(let i=0;i<7;i++){
-    const d = addDays(weekStart, i);
-    const btn = document.createElement('button');
-    btn.className = 'btn-outline small-btn' + (i===selectedDayIndex ? ' active' : '');
-    btn.innerHTML = DAY_NAMES[i].slice(0,3) + '<br>' + pad2(d.getDate())+'.'+pad2(d.getMonth()+1);
-    btn.onclick = ()=>{ selectedDayIndex = i; renderCalendar(); };
-    wrap.appendChild(btn);
-  }
-}
-
 function renderCalendar(){
   document.getElementById('weekLabel').textContent =
     formatDateRo(weekStart) + ' – ' + formatDateRo(addDays(weekStart,6));
   document.getElementById('calNote').textContent = currentUser.isAdmin
-    ? 'Click pe o celulă liberă pentru a face o rezervare. Click pe ✕ pentru a anula orice rezervare. 🔁 = rezervare dintr-o serie recurentă.'
-    : 'Click pe o celulă liberă pentru a face o rezervare. Blocurile gri sunt ocupate de alți artiști (fără detalii). Blocurile albastre sunt rezervările tale — click pe 🗑 pentru a cere ștergerea (necesită aprobarea administratorului).';
+    ? 'Click pe o celulă liberă pentru a face o rezervare. Click pe o rezervare pentru detalii și anulare. 🔁 = rezervare dintr-o serie recurentă.'
+    : 'Click pe o celulă liberă pentru a face o rezervare. Blocurile gri sunt ocupate de alți artiști. Click pe o rezervare pentru detalii — a ta poate fi ștearsă (cu aprobarea administratorului).';
 
   const mobile = isMobile();
-  document.getElementById('dayTabs').classList.toggle('hidden', !mobile);
-  if(mobile) buildDayTabs();
-
   const hourCount = (DAY_END-DAY_START)/60;
-  const rowHeight = mobile ? 56 : 48;
+  const rowHeight = mobile ? 32 : 48;
   const grid = document.getElementById('calGrid');
   grid.innerHTML = '';
   grid.className = 'cal-grid' + (mobile ? ' cal-grid-mobile' : '');
-  grid.style.gridTemplateColumns = mobile ? '48px 1fr' : '56px repeat(7,minmax(110px,1fr))';
+  grid.style.gridTemplateColumns = mobile ? '24px repeat(7,1fr)' : '56px repeat(7,minmax(110px,1fr))';
   grid.style.gridTemplateRows = '40px ' + (hourCount*rowHeight) + 'px';
 
-  const days = mobile ? [addDays(weekStart, selectedDayIndex)] : Array.from({length:7}, (_,i)=>addDays(weekStart,i));
+  const days = Array.from({length:7}, (_,i)=>addDays(weekStart,i));
 
   // header gol peste coloana de ore, apoi câte un header per zi
   grid.appendChild(makeDiv('cal-head',''));
   days.forEach((d,i)=>{
-    const dayIdx = mobile ? selectedDayIndex : i;
-    grid.appendChild(makeDiv('cal-head', DAY_NAMES[dayIdx] + '<small>'+formatDateRo(d)+'</small>'));
+    grid.appendChild(makeDiv('cal-head', DAY_NAMES[i] + '<small>'+formatDateRo(d)+'</small>'));
   });
 
   const hourLabelsWrap = document.createElement('div');
@@ -469,7 +469,7 @@ function renderCalendar(){
     const lbl = document.createElement('div');
     lbl.className='hour-label';
     lbl.style.height = rowHeight+'px';
-    lbl.textContent = minutesToLabel(DAY_START+h*60);
+    lbl.textContent = mobile ? minutesToLabel(DAY_START+h*60).slice(0,2) : minutesToLabel(DAY_START+h*60);
     hourLabelsWrap.appendChild(lbl);
   }
   grid.appendChild(hourLabelsWrap);
@@ -511,6 +511,7 @@ function makeBookingBlock(b, kind, hourCount, isAdminView){
   el.className = 'block ' + kind;
   el.style.top = top+'%';
   el.style.height = height+'%';
+  el.onclick = (ev)=>{ ev.stopPropagation(); openBookingDetail(b, kind, isAdminView); };
   if(kind==='busy'){
     el.textContent = 'Ocupat';
   } else {
@@ -531,6 +532,64 @@ function makeBookingBlock(b, kind, hourCount, isAdminView){
     }
   }
   return el;
+}
+
+// ---------- Detalii rezervare (popup mare, util mai ales pe telefon) ----------
+function openBookingDetail(b, kind, isAdminView){
+  document.getElementById('detailTitle').textContent = kind==='busy' ? 'Interval ocupat' : 'Rezervare';
+  document.getElementById('detailDate').textContent = b.date;
+  document.getElementById('detailInterval').textContent = minutesToLabel(b.start)+'–'+minutesToLabel(b.end);
+
+  const artistRow = document.getElementById('detailArtistRow');
+  if(kind!=='busy' && isAdminView){
+    artistRow.classList.remove('hidden');
+    document.getElementById('detailArtist').textContent = (b.artistName||b.artistEmail);
+  } else {
+    artistRow.classList.add('hidden');
+  }
+  document.getElementById('detailSeriesNote').classList.toggle('hidden', !b.seriesId);
+
+  const actions = document.getElementById('detailActions');
+  actions.innerHTML = '';
+  if(kind!=='busy'){
+    const btn = document.createElement('button');
+    btn.className='btn-danger'; btn.style.width='100%';
+    btn.textContent = currentUser.isAdmin ? 'Anulează rezervarea' : 'Cere ștergere';
+    btn.onclick = ()=>{ if(currentUser.isAdmin) cancelBooking(b); else requestDeleteBooking(b); };
+    actions.appendChild(btn);
+  }
+  const closeBtn = document.createElement('button');
+  closeBtn.className='btn-outline'; closeBtn.style.width='100%'; closeBtn.textContent='Închide';
+  closeBtn.onclick = closeBookingDetail;
+  actions.appendChild(closeBtn);
+
+  document.getElementById('bookingDetailModalBg').classList.remove('hidden');
+}
+function closeBookingDetail(){ document.getElementById('bookingDetailModalBg').classList.add('hidden'); }
+
+// ---------- Alegere ștergere: o dată vs toată seria recurentă ----------
+let seriesDeleteCtx = null;
+function openSeriesDeleteChoice(b, mode){
+  seriesDeleteCtx = { b, mode };
+  const verb = mode==='cancel' ? 'anulezi' : 'trimiți o cerere de ștergere pentru';
+  document.getElementById('seriesDeleteText').textContent =
+    'Această rezervare face parte dintr-o serie cu repetare săptămânală. Ce dorești să ' + verb + '?';
+  closeBookingDetail();
+  document.getElementById('seriesDeleteModalBg').classList.remove('hidden');
+}
+function closeSeriesDeleteModal(){ document.getElementById('seriesDeleteModalBg').classList.add('hidden'); seriesDeleteCtx=null; }
+async function seriesDeleteChoice(scope){
+  const ctx = seriesDeleteCtx;
+  closeSeriesDeleteModal();
+  if(!ctx) return;
+  const { b, mode } = ctx;
+  if(mode==='cancel'){
+    if(scope==='single') await doCancelBookingSingle(b);
+    else await doCancelBookingSeries(b);
+  } else {
+    if(scope==='single') await doRequestDeleteSingle(b);
+    else await doRequestDeleteSeries(b);
+  }
 }
 
 // ---------- Creare rezervare ----------
@@ -666,35 +725,82 @@ async function confirmBooking(){
 
 async function cancelBooking(b){
   // folosit doar de admin — artiștii nu au acces la ștergere directă (impus și de regulile Firestore)
+  if(b.seriesId){ openSeriesDeleteChoice(b, 'cancel'); return; }
   if(!confirm('Anulezi această rezervare?')) return;
+  await doCancelBookingSingle(b);
+}
+async function doCancelBookingSingle(b){
   const batch = db.batch();
   batch.delete(db.collection('bookings').doc(b.id));
   if(b.slotId) batch.delete(db.collection('slots').doc(b.slotId));
   await batch.commit();
+  closeBookingDetail();
+  await refreshAll();
+}
+async function doCancelBookingSeries(b){
+  if(!confirm('Sigur anulezi TOATE rezervările din această serie recurentă? Acțiunea nu poate fi anulată.')) return;
+  const snap = await db.collection('bookings').where('seriesId','==', b.seriesId).get();
+  const batch = db.batch();
+  snap.docs.forEach(d=>{
+    const bd = d.data();
+    batch.delete(db.collection('bookings').doc(d.id));
+    if(bd.slotId) batch.delete(db.collection('slots').doc(bd.slotId));
+  });
+  await batch.commit();
+  closeBookingDetail();
   await refreshAll();
 }
 
-async function requestDeleteBooking(b){
-  if(!confirm('Trimiți o cerere de ștergere către administrator pentru această rezervare?')) return;
-  await db.collection('deleteRequests').add({
-    bookingId: b.id,
-    artistEmail: currentUser.email,
-    artistName: currentUser.name,
-    date: b.date, start: b.start, end: b.end,
-    status: 'pending',
-    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-  });
+function notifyAdminMail(b, scopeLabel){
   // cel mai de încredere mecanism e lista din tab-ul "Cereri ștergere" a adminului;
   // în plus, deschidem (dacă e posibil) un email pre-completat, ca notificare suplimentară
   const subject = encodeURIComponent('Cerere ștergere rezervare - ' + currentUser.name);
   const body = encodeURIComponent(
     'Artist: ' + currentUser.name + ' (' + currentUser.email + ')\n' +
     'Data: ' + b.date + '\n' +
-    'Interval: ' + minutesToLabel(b.start) + '–' + minutesToLabel(b.end) + '\n\n' +
+    'Interval: ' + minutesToLabel(b.start) + '–' + minutesToLabel(b.end) + '\n' +
+    'Domeniu cerere: ' + scopeLabel + '\n\n' +
     'Te rog aprobă cererea din aplicație, tab-ul "Cereri ștergere".'
   );
   window.location.href = 'mailto:' + ADMIN_EMAIL + '?subject=' + subject + '&body=' + body;
+}
+
+async function requestDeleteBooking(b){
+  if(b.seriesId){ openSeriesDeleteChoice(b, 'request'); return; }
+  if(!confirm('Trimiți o cerere de ștergere către administrator pentru această rezervare?')) return;
+  await doRequestDeleteSingle(b);
+}
+async function doRequestDeleteSingle(b){
+  await db.collection('deleteRequests').add({
+    bookingId: b.id,
+    seriesId: b.seriesId || null,
+    scope: 'single',
+    artistEmail: currentUser.email,
+    artistName: currentUser.name,
+    date: b.date, start: b.start, end: b.end,
+    status: 'pending',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  notifyAdminMail(b, 'o singură dată');
   alert('Cererea a fost trimisă administratorului (vizibilă în tab-ul lui "Cereri ștergere").');
+  closeBookingDetail();
+  await refreshAll();
+}
+async function doRequestDeleteSeries(b){
+  if(!confirm('Trimiți o cerere de ștergere pentru TOATE rezervările din această serie recurentă?')) return;
+  await db.collection('deleteRequests').add({
+    bookingId: b.id,
+    seriesId: b.seriesId,
+    scope: 'series',
+    artistEmail: currentUser.email,
+    artistName: currentUser.name,
+    date: b.date, start: b.start, end: b.end,
+    status: 'pending',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  notifyAdminMail(b, 'toată seria recurentă');
+  alert('Cererea (pentru toată seria recurentă) a fost trimisă administratorului.');
+  closeBookingDetail();
   await refreshAll();
 }
 
@@ -706,8 +812,9 @@ async function renderRequests(){
   tbody.innerHTML = '';
   document.getElementById('requestsEmptyNote').textContent = rows.length ? '' : 'Nu există cereri de ștergere în așteptare.';
   rows.forEach(r=>{
+    const scopeLabel = r.scope==='series' ? '🔁 Toată seria' : 'O dată';
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td>'+r.artistName+'</td><td>'+r.date+'</td><td>'+minutesToLabel(r.start)+'–'+minutesToLabel(r.end)+'</td><td></td>';
+    tr.innerHTML = '<td>'+r.artistName+'</td><td>'+r.date+'</td><td>'+minutesToLabel(r.start)+'–'+minutesToLabel(r.end)+'</td><td>'+scopeLabel+'</td><td></td>';
     const approveBtn = document.createElement('button');
     approveBtn.className='btn-primary small-btn'; approveBtn.textContent='Aprobă'; approveBtn.style.marginRight='6px';
     approveBtn.onclick = ()=> approveDeleteRequest(r);
@@ -721,13 +828,26 @@ async function renderRequests(){
 }
 
 async function approveDeleteRequest(r){
-  if(!confirm('Aprobi ștergerea rezervării din '+r.date+' ('+minutesToLabel(r.start)+'–'+minutesToLabel(r.end)+')?')) return;
-  const bookingSnap = await db.collection('bookings').doc(r.bookingId).get();
+  const isSeries = r.scope==='series' && r.seriesId;
+  const confirmMsg = isSeries
+    ? 'Aprobi ștergerea ÎNTREGII serii recurente (toate datele programate) pentru '+r.artistName+'?'
+    : 'Aprobi ștergerea rezervării din '+r.date+' ('+minutesToLabel(r.start)+'–'+minutesToLabel(r.end)+')?';
+  if(!confirm(confirmMsg)) return;
   const batch = db.batch();
-  if(bookingSnap.exists){
-    const bd = bookingSnap.data();
-    batch.delete(db.collection('bookings').doc(r.bookingId));
-    if(bd.slotId) batch.delete(db.collection('slots').doc(bd.slotId));
+  if(isSeries){
+    const snap = await db.collection('bookings').where('seriesId','==', r.seriesId).get();
+    snap.docs.forEach(d=>{
+      const bd = d.data();
+      batch.delete(db.collection('bookings').doc(d.id));
+      if(bd.slotId) batch.delete(db.collection('slots').doc(bd.slotId));
+    });
+  } else {
+    const bookingSnap = await db.collection('bookings').doc(r.bookingId).get();
+    if(bookingSnap.exists){
+      const bd = bookingSnap.data();
+      batch.delete(db.collection('bookings').doc(r.bookingId));
+      if(bd.slotId) batch.delete(db.collection('slots').doc(bd.slotId));
+    }
   }
   batch.delete(db.collection('deleteRequests').doc(r.id));
   await batch.commit();
