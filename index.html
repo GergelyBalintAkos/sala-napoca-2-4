@@ -113,10 +113,10 @@
     </div>
 
     <div id="tab-summary" class="hidden">
-      <div class="card">
+      <div class="card hidden" id="myInfoCard">
         <h3>Informațiile mele</h3>
-        <p style="margin:4px 0;">Nr./data contract: <b id="myContract">-</b></p>
-        <p style="margin:4px 0 0;">Cod de acces sală: <b id="myAccessCode">-</b></p>
+        <p style="margin:4px 0;" id="myContractRow">Nr./data contract: <b id="myContract"></b></p>
+        <p style="margin:4px 0 0;" id="myAccessCodeRow">Cod de acces sală: <b id="myAccessCode"></b></p>
       </div>
       <div class="card">
         <h3>Rezumatul meu</h3>
@@ -708,8 +708,13 @@ function shiftSummaryMonth(n){ summaryMonth = addMonths(summaryMonth, n); render
 function goSummaryThisMonth(){ summaryMonth = firstOfMonth(new Date()); renderSummary(); }
 
 async function renderSummary(){
-  document.getElementById('myContract').textContent = currentUser.contractInfo || '(necompletat)';
-  document.getElementById('myAccessCode').textContent = currentUser.accessCode || '(necompletat)';
+  const hasContract = !!currentUser.contractInfo;
+  const hasAccessCode = !!currentUser.accessCode;
+  document.getElementById('myInfoCard').classList.toggle('hidden', !hasContract && !hasAccessCode);
+  document.getElementById('myContractRow').classList.toggle('hidden', !hasContract);
+  document.getElementById('myAccessCodeRow').classList.toggle('hidden', !hasAccessCode);
+  document.getElementById('myContract').textContent = currentUser.contractInfo || '';
+  document.getElementById('myAccessCode').textContent = currentUser.accessCode || '';
   document.getElementById('summaryMonthLabel').textContent = monthLabel(summaryMonth);
   const [monthStart, monthEnd] = monthRangeKeys(summaryMonth);
   const snap = await db.collection('bookings').where('artistEmail','==',currentUser.email).get();
