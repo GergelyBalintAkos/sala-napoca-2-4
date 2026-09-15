@@ -421,6 +421,7 @@ auth.onAuthStateChanged(async (user)=>{
   document.getElementById('appScreen').classList.remove('hidden');
   document.getElementById('whoAmI').textContent = (isAdmin? '👤 Admin — ' : '🎤 ') + name;
 
+  activeTab = 'calendar'; // la fiecare autentificare pornim mereu de la calendar
   if(isAdmin){ await refreshPendingCount(); await loadArtistsCache(); }
   buildTabs();
   showTab();
@@ -573,7 +574,7 @@ function makeBookingBlock(b, kind, hourCount, isAdminView){
   if(kind==='busy'){
     el.innerHTML = '<span class="mobile-label">Oc.</span>Ocupat';
   } else {
-    const label = (b.seriesId ? '🔁 ' : '') + (isAdminView ? (b.artistName||b.artistEmail) : 'Rezervarea ta');
+    const label = (b.seriesId ? '🔁 ' : '') + (isAdminView ? (b.artistName||b.artistEmail) : currentUser.name);
     const initials = getInitials(isAdminView ? (b.artistName||b.artistEmail) : currentUser.name);
     el.innerHTML = '<span class="mobile-label">'+initials+'</span><b>'+label+'</b>' + minutesToLabel(b.start)+'–'+minutesToLabel(b.end);
     if(currentUser.isAdmin){
@@ -680,6 +681,7 @@ function openBookingModal(date, suggestedStart){
     if(t===suggestedStart) o.selected=true;
     startSel.appendChild(o);
   }
+  startSel.value = String(suggestedStart); // ne asigurăm explicit că se vede ora pe care s-a dat click, nu 07:00
   function fillEnd(){
     const startVal = parseInt(startSel.value);
     endSel.innerHTML='';
@@ -763,6 +765,7 @@ function openEditBookingModal(b){
     if(t===b.start) o.selected=true;
     startSel.appendChild(o);
   }
+  startSel.value = String(b.start);
   function fillEnd(){
     const startVal = parseInt(startSel.value);
     endSel.innerHTML='';
@@ -876,42 +879,50 @@ async function confirmEditBooking(){
   const dk = document.getElementById('modalDateEdit').value;
   if(!dk){ document.getElementById('modalError').textContent='Alege o dată.'; return; }
 
-  const ctx = getBookingArtistContext();
-  const hours = (end-start)/60;
-  const cost = +(hours*(ctx.rate||0)).toFixed(2);
-
-  const snap = await db.collection('slots').where('date','==',dk).get();
-  const overlap = snap.docs.some(d=>{
-    if(d.id === b.slotId) return false; // propriul slot nu se numără ca suprapunere
-    const s = d.data();
-    return s.start < end && s.end > start;
-  });
-  if(overlap){
-    document.getElementById('modalError').textContent = 'Intervalul ales se suprapune cu o altă rezervare.';
-    return;
-  }
-
-  const batch = db.batch();
-  if(b.slotId) batch.delete(db.collection('slots').doc(b.slotId));
-  const newSlotRef = db.collection('slots').doc();
-  batch.set(newSlotRef, {
-    date: dk, start, end,
-    createdBy: currentUser.email,
-    bookingId: b.id
-  });
-  batch.update(db.collection('bookings').doc(b.id), {
-    artistEmail: ctx.email,
-    artistName: ctx.name,
-    date: dk, start, end, cost,
-    slotId: newSlotRef.id
-  });
+  const confirmBtn = document.getElementById('modalConfirmBtn');
+  const originalBtnText = confirmBtn.textContent;
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = 'Se salvează...';
 
   try{
+    const ctx = getBookingArtistContext();
+    const hours = (end-start)/60;
+    const cost = +(hours*(ctx.rate||0)).toFixed(2);
+
+    const snap = await db.collection('slots').where('date','==',dk).get();
+    const overlap = snap.docs.some(d=>{
+      if(d.id === b.slotId) return false; // propriul slot nu se numără ca suprapunere
+      const s = d.data();
+      return s.start < end && s.end > start;
+    });
+    if(overlap){
+      document.getElementById('modalError').textContent = 'Intervalul ales se suprapune cu o altă rezervare.';
+      return;
+    }
+
+    const batch = db.batch();
+    if(b.slotId) batch.delete(db.collection('slots').doc(b.slotId));
+    const newSlotRef = db.collection('slots').doc();
+    batch.set(newSlotRef, {
+      date: dk, start, end,
+      createdBy: currentUser.email,
+      bookingId: b.id
+    });
+    batch.update(db.collection('bookings').doc(b.id), {
+      artistEmail: ctx.email,
+      artistName: ctx.name,
+      date: dk, start, end, cost,
+      slotId: newSlotRef.id
+    });
+
     await batch.commit();
     closeModal();
     await refreshAll();
   }catch(err){
     document.getElementById('modalError').textContent = 'Eroare la salvare: ' + err.message;
+  }finally{
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = originalBtnText;
   }
 }
 
@@ -962,46 +973,57 @@ async function confirmBooking(){
     }
   }
 
-  const ctx = getBookingArtistContext();
-  const hours = (end-start)/60;
-  const cost = +(hours*(ctx.rate||0)).toFixed(2);
-  const seriesId = ((repeatOn||dateRangeOn) && occurrenceDates.length>1) ? db.collection('bookings').doc().id : null;
-  const batch = db.batch();
-  const skipped = [];
-  let createdCount = 0;
-
-  for(const occDate of occurrenceDates){
-    const dk = dateKey(occDate);
-    const snap = await db.collection('slots').where('date','==',dk).get();
-    const overlap = snap.docs.some(d=>{
-      const s = d.data();
-      return s.start < end && s.end > start;
-    });
-    if(overlap){ skipped.push(formatDateRo(occDate)); continue; }
-    const bookingRef = db.collection('bookings').doc();
-    const slotRef = db.collection('slots').doc();
-    batch.set(bookingRef, {
-      artistEmail: ctx.email,
-      artistName: ctx.name,
-      date: dk, start, end, cost,
-      slotId: slotRef.id,
-      seriesId: seriesId,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    batch.set(slotRef, {
-      date: dk, start, end,
-      createdBy: currentUser.email,
-      bookingId: bookingRef.id
-    });
-    createdCount++;
-  }
-
-  if(createdCount===0){
-    document.getElementById('modalError').textContent = 'Toate datele selectate sunt deja ocupate — alege alt interval.';
-    return;
-  }
+  const confirmBtn = document.getElementById('modalConfirmBtn');
+  const originalBtnText = confirmBtn.textContent;
+  confirmBtn.disabled = true; // previne dublu-click / trimiteri suprapuse cât timp se salvează
+  confirmBtn.textContent = 'Se salvează...';
 
   try{
+    const ctx = getBookingArtistContext();
+    const hours = (end-start)/60;
+    const cost = +(hours*(ctx.rate||0)).toFixed(2);
+    const seriesId = ((repeatOn||dateRangeOn) && occurrenceDates.length>1) ? db.collection('bookings').doc().id : null;
+
+    // interogăm toate zilele în PARALEL (nu una câte una) — la o serie cu multe date,
+    // varianta secvențială era lentă și dădea impresia că butonul "nu merge" la primul click
+    const snaps = await Promise.all(
+      occurrenceDates.map(occDate => db.collection('slots').where('date','==',dateKey(occDate)).get())
+    );
+
+    const batch = db.batch();
+    const skipped = [];
+    let createdCount = 0;
+
+    occurrenceDates.forEach((occDate, i)=>{
+      const dk = dateKey(occDate);
+      const overlap = snaps[i].docs.some(d=>{
+        const s = d.data();
+        return s.start < end && s.end > start;
+      });
+      if(overlap){ skipped.push(formatDateRo(occDate)); return; }
+      const bookingRef = db.collection('bookings').doc();
+      const slotRef = db.collection('slots').doc();
+      batch.set(bookingRef, {
+        artistEmail: ctx.email,
+        artistName: ctx.name,
+        date: dk, start, end, cost,
+        slotId: slotRef.id,
+        seriesId: seriesId,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      batch.set(slotRef, {
+        date: dk, start, end,
+        createdBy: currentUser.email,
+        bookingId: bookingRef.id
+      });
+      createdCount++;
+    });
+
+    if(createdCount===0){
+      document.getElementById('modalError').textContent = 'Toate datele selectate sunt deja ocupate — alege alt interval.';
+      return;
+    }
+
     await batch.commit();
     closeModal();
     await refreshAll();
@@ -1010,6 +1032,9 @@ async function confirmBooking(){
     }
   }catch(err){
     document.getElementById('modalError').textContent = 'Eroare la salvare: ' + err.message;
+  }finally{
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = originalBtnText;
   }
 }
 
@@ -1041,20 +1066,6 @@ async function doCancelBookingSeries(b){
   await refreshAll();
 }
 
-function notifyAdminMail(b, scopeLabel){
-  // cel mai de încredere mecanism e lista din tab-ul "Cereri ștergere" a adminului;
-  // în plus, deschidem (dacă e posibil) un email pre-completat, ca notificare suplimentară
-  const subject = encodeURIComponent('Cerere ștergere rezervare - ' + currentUser.name);
-  const body = encodeURIComponent(
-    'Artist: ' + currentUser.name + ' (' + currentUser.email + ')\n' +
-    'Data: ' + b.date + '\n' +
-    'Interval: ' + minutesToLabel(b.start) + '–' + minutesToLabel(b.end) + '\n' +
-    'Domeniu cerere: ' + scopeLabel + '\n\n' +
-    'Te rog aprobă cererea din aplicație, tab-ul "Cereri ștergere".'
-  );
-  window.location.href = 'mailto:' + ADMIN_EMAIL + '?subject=' + subject + '&body=' + body;
-}
-
 async function requestDeleteBooking(b){
   if(b.seriesId){ openSeriesDeleteChoice(b, 'request'); return; }
   if(!confirm('Trimiți o cerere de ștergere către administrator pentru această rezervare?')) return;
@@ -1071,7 +1082,6 @@ async function doRequestDeleteSingle(b){
     status: 'pending',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
-  notifyAdminMail(b, 'o singură dată');
   alert('Cererea a fost trimisă administratorului (vizibilă în tab-ul lui "Cereri ștergere").');
   closeBookingDetail();
   await refreshAll();
@@ -1088,7 +1098,6 @@ async function doRequestDeleteSeries(b){
     status: 'pending',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
-  notifyAdminMail(b, 'toată seria recurentă');
   alert('Cererea (pentru toată seria recurentă) a fost trimisă administratorului.');
   closeBookingDetail();
   await refreshAll();
