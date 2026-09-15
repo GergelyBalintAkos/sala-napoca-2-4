@@ -560,6 +560,50 @@ function renderCalendar(){
 
 window.addEventListener('resize', ()=>{ if(currentUser && activeTab==='calendar') renderCalendar(); });
 
+// ---------- Navigare între săptămâni prin glisare (swipe) pe telefon ----------
+(function(){
+  const grid = document.getElementById('calGrid');
+  let startX=0, startY=0, startT=0, dragging=false, swiped=false;
+  const SWIPE_THRESHOLD = 40; // px minim pentru a conta ca o glisare
+
+  grid.addEventListener('touchstart', (e)=>{
+    if(!isMobile() || e.touches.length!==1) return;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    startT = Date.now();
+    dragging = true;
+    swiped = false;
+  }, {passive:true});
+
+  grid.addEventListener('touchmove', (e)=>{
+    if(!dragging || !isMobile() || e.touches.length!==1) return;
+    const dx = e.touches[0].clientX - startX;
+    const dy = e.touches[0].clientY - startY;
+    if(Math.abs(dx) > 15 && Math.abs(dx) > Math.abs(dy)){
+      swiped = true;
+      e.preventDefault(); // evităm scroll-ul lateral accidental cât timp glisăm între săptămâni
+    }
+  }, {passive:false});
+
+  grid.addEventListener('touchend', (e)=>{
+    if(!dragging){ return; }
+    dragging = false;
+    if(!isMobile()) return;
+    const touch = e.changedTouches[0];
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+    const dt = Date.now() - startT;
+    if(swiped && dt < 800 && Math.abs(dx) > SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)){
+      shiftWeek(dx < 0 ? 1 : -1); // stânga = săptămâna următoare, dreapta = săptămâna anterioară
+    }
+  });
+
+  // blocăm click-ul generat automat de browser după o glisare, ca să nu deschidă din greșeală modalul de rezervare
+  grid.addEventListener('click', (e)=>{
+    if(swiped){ e.stopPropagation(); e.preventDefault(); swiped=false; }
+  }, true);
+})();
+
 function makeDiv(cls, html){ const d=document.createElement('div'); d.className=cls; d.innerHTML=html; return d; }
 
 function makeBookingBlock(b, kind, hourCount, isAdminView){
