@@ -158,6 +158,7 @@
         <div class="add-artist-form">
           <div><label>Email</label><input id="newArtistEmail" placeholder="artist@exemplu.com"></div>
           <div><label>Nume</label><input id="newArtistName" placeholder="Nume Prenume"></div>
+          <div><label>Telefon</label><input id="newArtistPhone" type="tel" placeholder="ex. 07xx xxx xxx"></div>
           <div><label>Tarif/oră (RON)</label><input id="newArtistRate" type="number" min="0" step="1"></div>
           <div><label>Nr./data contract</label><input id="newArtistContract" placeholder="ex. 12/15.03.2026"></div>
           <div><label>Cod de acces sală</label><input id="newArtistAccessCode" placeholder="ex. 4521"></div>
@@ -165,7 +166,7 @@
         </div>
         <div id="artistFormMsg" class="note"></div>
         <table style="margin-top:18px;">
-          <thead><tr><th>Nume</th><th>Email</th><th>Tarif/oră</th><th>Nr./data contract</th><th>Cod acces</th><th></th></tr></thead>
+          <thead><tr><th>Nume</th><th>Email</th><th>Telefon</th><th>Tarif/oră</th><th>Nr./data contract</th><th>Cod acces</th><th></th></tr></thead>
           <tbody id="artistsTableBody"></tbody>
         </table>
       </div>
@@ -1246,12 +1247,13 @@ async function renderArtists(){
   tbody.innerHTML='';
   artistsCache.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).forEach(a=>{
     const tr=document.createElement('tr');
-    tr.innerHTML = '<td>'+(a.name||'')+'</td><td>'+a.email+'</td><td>'+(a.hourlyRate||0)+' RON</td><td>'+(a.contractInfo||'')+'</td><td>'+(a.accessCode||'')+'</td><td></td>';
+    tr.innerHTML = '<td>'+(a.name||'')+'</td><td>'+a.email+'</td><td>'+(a.phone||'')+'</td><td>'+(a.hourlyRate||0)+' RON</td><td>'+(a.contractInfo||'')+'</td><td>'+(a.accessCode||'')+'</td><td></td>';
     const editBtn=document.createElement('button');
     editBtn.className='btn-outline small-btn'; editBtn.textContent='Editează';
     editBtn.onclick=()=>{
       document.getElementById('newArtistEmail').value=a.email;
       document.getElementById('newArtistName').value=a.name||'';
+      document.getElementById('newArtistPhone').value=a.phone||'';
       document.getElementById('newArtistRate').value=a.hourlyRate||0;
       document.getElementById('newArtistContract').value=a.contractInfo||'';
       document.getElementById('newArtistAccessCode').value=a.accessCode||'';
@@ -1306,6 +1308,7 @@ async function renameArtistEmail(){
     await db.collection('artists').doc(sanitizeEmailId(newEmail)).set({
       email: newEmail,
       name: oldArtist.name||'',
+      phone: oldArtist.phone||'',
       hourlyRate: oldArtist.hourlyRate||0,
       contractInfo: oldArtist.contractInfo||'',
       accessCode: oldArtist.accessCode||''
@@ -1340,15 +1343,17 @@ async function renameArtistEmail(){
 async function saveArtist(){
   const email = document.getElementById('newArtistEmail').value.trim().toLowerCase();
   const name = document.getElementById('newArtistName').value.trim();
+  const phone = document.getElementById('newArtistPhone').value.trim();
   const rate = parseFloat(document.getElementById('newArtistRate').value) || 0;
   const contractInfo = document.getElementById('newArtistContract').value.trim();
   const accessCode = document.getElementById('newArtistAccessCode').value.trim();
   const msg = document.getElementById('artistFormMsg');
   if(!email || !name){ msg.textContent='Completează email și nume.'; msg.style.color='var(--danger)'; return; }
-  await db.collection('artists').doc(sanitizeEmailId(email)).set({ email, name, hourlyRate: rate, contractInfo, accessCode }, {merge:true});
+  await db.collection('artists').doc(sanitizeEmailId(email)).set({ email, name, phone, hourlyRate: rate, contractInfo, accessCode }, {merge:true});
   msg.textContent='Salvat.'; msg.style.color='var(--success)';
   document.getElementById('newArtistEmail').value='';
   document.getElementById('newArtistName').value='';
+  document.getElementById('newArtistPhone').value='';
   document.getElementById('newArtistRate').value='';
   document.getElementById('newArtistContract').value='';
   document.getElementById('newArtistAccessCode').value='';
