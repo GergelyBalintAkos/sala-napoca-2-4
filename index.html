@@ -193,7 +193,9 @@
           <span id="reportsMonthLabel"></span>
           <button class="btn-outline small-btn" onclick="shiftReportsMonth(1)">Luna următoare ›</button>
           <button class="btn-outline small-btn" onclick="goReportsThisMonth()">Luna curentă</button>
+          <button class="btn-outline small-btn" onclick="cleanupDuplicateBookings()">🧹 Curăță duplicate</button>
         </div>
+        <div id="reportsCleanupMsg" class="note"></div>
         <div id="reportsArtistList"></div>
         <div class="totals" id="reportsTotals" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);"></div>
       </div>
@@ -570,7 +572,13 @@ function renderCalendar(){
     // blocuri: ocupate (busy) + ale mele
     const dk = dateKey(d);
     if(currentUser.isAdmin){
-      allBookingsCache.filter(b=>b.date===dk).forEach(b=> col.appendChild(makeBookingBlock(b,'mine',hourCount,true)) );
+      const seenKeys = new Set(); // evită afișarea de blocuri duplicate (aceeași rezervare de 2 ori în baza de date)
+      allBookingsCache.filter(b=>b.date===dk).forEach(b=>{
+        const k = (b.artistEmail||'')+'|'+b.start+'|'+b.end;
+        if(seenKeys.has(k)) return;
+        seenKeys.add(k);
+        col.appendChild(makeBookingBlock(b,'mine',hourCount,true));
+      });
     } else {
       busySlotsCache.filter(s=>s.date===dk).forEach(s=>{
         const mine = myBookingsCache.find(b=>b.date===dk && b.start===s.start && b.end===s.end);
@@ -1245,8 +1253,15 @@ async function renderSummary(){
   document.getElementById('summaryMonthLabel').textContent = monthLabel(summaryMonth);
   const [monthStart, monthEnd] = monthRangeKeys(summaryMonth);
   const snap = await db.collection('bookings').where('artistEmail','==',currentUser.email).get();
+  const seenKeys = new Set(); // evită afișarea de rânduri duplicate (aceeași rezervare de 2 ori în baza de date)
   const rows = snap.docs.map(d=>d.data())
     .filter(r=> r.date>=monthStart && r.date<=monthEnd)
+    .filter(r=>{
+      const k = r.date+'|'+r.start+'|'+r.end;
+      if(seenKeys.has(k)) return false;
+      seenKeys.add(k);
+      return true;
+    })
     .sort((a,b)=> a.date.localeCompare(b.date) || a.start-b.start);
   let totalH=0, totalC=0;
   const tbody = document.getElementById('sumTableBody');
@@ -1387,6 +1402,64 @@ async function saveArtist(){
 function shiftReportsMonth(n){ reportsMonth = addMonths(reportsMonth, n); renderReports(); }
 function goReportsThisMonth(){ reportsMonth = firstOfMonth(new Date()); renderReports(); }
 
+// caută în TOATĂ baza de date (nu doar luna afișată) rezervări duplicate — adică aceeași dată,
+// același interval orar și același artist — și le șterge pe cele în plus, păstrând o singură copie.
+// probabil au apărut din cauza unui bug vechi de dublu-click, deja reparat.
+async function cleanupDuplicateBookings(){
+  const msg = document.getElementById('reportsCleanupMsg');
+  if(!confirm('Caut rezervări duplicate (aceeași dată, interval orar și artist) în toată baza de date. Continui?')) return;
+  msg.textContent = 'Se verifică...'; msg.style.color='var(--muted)';
+  try{
+    const snap = await db.collection('bookings').get();
+    const groups = {};
+    snap.docs.forEach(d=>{
+      const r = d.data();
+      const key = (r.artistEmail||'')+'|'+r.date+'|'+r.start+'|'+r.end;
+      if(!groups[key]) groups[key] = [];
+      groups[key].push({ id:d.id, ...r });
+    });
+
+    const toDelete = [];
+    Object.values(groups).forEach(list=>{
+      if(list.length<2) return;
+      // păstrăm cea mai veche rezervare (după data creării), ștergem restul copiilor
+      list.sort((a,b)=>{
+        const ta = (a.createdAt && a.createdAt.toMillis) ? a.createdAt.toMillis() : 0;
+        const tb = (b.createdAt && b.createdAt.toMillis) ? b.createdAt.toMillis() : 0;
+        return ta - tb;
+      });
+      list.slice(1).forEach(x=> toDelete.push(x));
+    });
+
+    if(toDelete.length===0){
+      msg.textContent = 'Nu s-au găsit rezervări duplicate.'; msg.style.color='var(--success)';
+      return;
+    }
+
+    const details = toDelete.map(x=> (x.artistName||x.artistEmail)+' — '+x.date+' '+minutesToLabel(x.start)+'–'+minutesToLabel(x.end)).join('\n');
+    if(!confirm('S-au găsit '+toDelete.length+' rezervări duplicate (se păstrează câte o singură copie din fiecare, se șterg restul):\n\n'+details+'\n\nContinui cu ștergerea?')){
+      msg.textContent = ''; return;
+    }
+
+    const CHUNK = 200; // fiecare duplicat șters = până la 2 operații (rezervare + slot), sub limita de 500/lot
+    for(let i=0; i<toDelete.length; i+=CHUNK){
+      const chunk = toDelete.slice(i, i+CHUNK);
+      const batch = db.batch();
+      chunk.forEach(x=>{
+        batch.delete(db.collection('bookings').doc(x.id));
+        if(x.slotId) batch.delete(db.collection('slots').doc(x.slotId));
+      });
+      await batch.commit();
+    }
+
+    msg.textContent = 'Gata! S-au șters '+toDelete.length+' rezervări duplicate.'; msg.style.color='var(--success)';
+    await renderReports();
+    await refreshAll();
+  }catch(err){
+    msg.textContent = 'Eroare: ' + err.message; msg.style.color='var(--danger)';
+  }
+}
+
 async function renderReports(){
   document.getElementById('reportsMonthLabel').textContent = monthLabel(reportsMonth);
   const [monthStart, monthEnd] = monthRangeKeys(reportsMonth);
@@ -1398,11 +1471,15 @@ async function renderReports(){
   const artistsByEmail = {};
   artistsSnap.docs.forEach(d=>{ const a=d.data(); artistsByEmail[a.email]=a; });
 
-  const byArtist = {}; // email -> { name, rows:[], hours, cost }
+  const byArtist = {}; // email -> { name, rows:[], hours, cost, seen:Set }
   bookingsSnap.docs.forEach(d=>{
     const r = d.data();
     const key = r.artistEmail;
-    if(!byArtist[key]) byArtist[key] = { name:r.artistName||r.artistEmail, rows:[], hours:0, cost:0 };
+    if(!byArtist[key]) byArtist[key] = { name:r.artistName||r.artistEmail, rows:[], hours:0, cost:0, seen:new Set() };
+    // evită afișarea aceleiași rezervări de mai multe ori (dacă din greșeală există rezervări duplicate în baza de date)
+    const dupKey = r.date+'|'+r.start+'|'+r.end;
+    if(byArtist[key].seen.has(dupKey)) return;
+    byArtist[key].seen.add(dupKey);
     byArtist[key].rows.push(r);
     byArtist[key].hours += (r.end-r.start)/60;
     byArtist[key].cost += r.cost||0;
