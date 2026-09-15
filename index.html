@@ -100,6 +100,9 @@
   <input type="password" id="loginPassword" placeholder="••••••••">
   <div id="loginError"></div>
   <button class="btn-primary" style="width:100%;margin-top:14px;" onclick="doLogin()">Autentificare</button>
+  <p style="margin-top:10px;text-align:center;">
+    <a href="#" onclick="doForgotPassword(); return false;" style="color:var(--accent);font-size:13px;">Ai uitat parola?</a>
+  </p>
 </div>
 
 <div id="appScreen" class="hidden">
@@ -374,16 +377,36 @@ async function loadArtistsCache(){
 function doLogin(){
   const email = document.getElementById('loginEmail').value.trim();
   const pass = document.getElementById('loginPassword').value;
-  document.getElementById('loginError').textContent = '';
+  const errEl = document.getElementById('loginError');
+  errEl.style.color = ''; errEl.textContent = '';
   if(!email || !pass){
-    document.getElementById('loginError').textContent = 'Completează emailul și parola.';
+    errEl.textContent = 'Completează emailul și parola.';
     return;
   }
   auth.signInWithEmailAndPassword(email, pass).catch(err=>{
-    document.getElementById('loginError').textContent = 'Autentificare eșuată: email sau parolă greșită.';
+    errEl.textContent = 'Autentificare eșuată: email sau parolă greșită.';
   });
 }
 function doLogout(){ auth.signOut(); }
+
+// ---------- Resetare parolă (autoservire, prin email trimis de Firebase) ----------
+function doForgotPassword(){
+  const email = document.getElementById('loginEmail').value.trim();
+  const errEl = document.getElementById('loginError');
+  errEl.style.color = '';
+  if(!email){
+    errEl.textContent = 'Completează mai întâi emailul tău, apoi apasă din nou pe "Ai uitat parola?".';
+    return;
+  }
+  errEl.textContent = 'Se trimite emailul...';
+  auth.sendPasswordResetEmail(email).then(()=>{
+    errEl.style.color = 'var(--success)';
+    errEl.textContent = 'Ți-am trimis un email cu instrucțiuni pentru resetarea parolei (verifică și folderul Spam).';
+  }).catch(err=>{
+    errEl.style.color = 'var(--danger)';
+    errEl.textContent = 'Eroare: ' + err.message;
+  });
+}
 
 auth.onAuthStateChanged(async (user)=>{
   if(!user){
